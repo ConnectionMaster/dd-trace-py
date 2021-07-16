@@ -3,11 +3,12 @@ import subprocess
 import sys
 import tempfile
 
-import ddtrace
-from ddtrace.compat import PY3
-from ddtrace.vendor import six
+import six
 
-from .. import BaseTestCase
+import ddtrace
+from ddtrace.internal.compat import PY3
+
+from ..utils import BaseTestCase
 
 
 def inject_sitecustomize(path):

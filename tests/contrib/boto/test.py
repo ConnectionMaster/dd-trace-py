@@ -21,10 +21,9 @@ from ddtrace.contrib.boto.patch import patch
 from ddtrace.contrib.boto.patch import unpatch
 from ddtrace.ext import http
 from tests.opentracer.utils import init_tracer
-
-from ... import TracerTestCase
-from ... import assert_is_measured
-from ... import assert_span_http_status_code
+from tests.utils import TracerTestCase
+from tests.utils import assert_is_measured
+from tests.utils import assert_span_http_status_code
 
 
 class BotoTest(TracerTestCase):
@@ -135,7 +134,7 @@ class BotoTest(TracerTestCase):
         self.assertEqual(span.resource, "s3.head")
         self.assertEqual(span.name, "s3.command")
 
-        # Checking for resource incase of error
+        # Checking for resource in case of error
         try:
             s3.get_bucket("big_bucket")
         except Exception:

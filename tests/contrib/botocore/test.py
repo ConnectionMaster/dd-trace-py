@@ -15,21 +15,21 @@ from moto import mock_s3
 from moto import mock_sqs
 
 from ddtrace import Pin
-from ddtrace.compat import stringify
 from ddtrace.constants import ANALYTICS_SAMPLE_RATE_KEY
 from ddtrace.contrib.botocore.patch import patch
 from ddtrace.contrib.botocore.patch import unpatch
+from ddtrace.internal.compat import stringify
 from ddtrace.propagation.http import HTTP_HEADER_PARENT_ID
 from ddtrace.propagation.http import HTTP_HEADER_TRACE_ID
+from ddtrace.utils.version import parse_version
 from tests.opentracer.utils import init_tracer
-
-from ... import TracerTestCase
-from ... import assert_is_measured
-from ... import assert_span_http_status_code
+from tests.utils import TracerTestCase
+from tests.utils import assert_is_measured
+from tests.utils import assert_span_http_status_code
 
 
 # Parse botocore.__version_ from "1.9.0" to (1, 9, 0)
-BOTOCORE_VERSION = tuple(int(x) for x in botocore.__version__.split("."))
+BOTOCORE_VERSION = parse_version(botocore.__version__)
 
 
 def get_zip_lambda():
@@ -171,6 +171,7 @@ class BotocoreTest(TracerTestCase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(span.get_tag("aws.region"), "us-east-1")
         self.assertEqual(span.get_tag("aws.operation"), "ListQueues")
+        self.assertIsNone(span.get_tag("params.MessageBody"))
         assert_is_measured(span)
         assert_span_http_status_code(span, 200)
         self.assertEqual(span.service, "test-botocore-tracing.sqs")
@@ -189,6 +190,7 @@ class BotocoreTest(TracerTestCase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(span.get_tag("aws.region"), "us-east-1")
         self.assertEqual(span.get_tag("aws.operation"), "SendMessage")
+        self.assertIsNone(span.get_tag("params.MessageBody"))
         assert_is_measured(span)
         assert_span_http_status_code(span, 200)
         self.assertEqual(span.service, "test-botocore-tracing.sqs")
@@ -219,6 +221,7 @@ class BotocoreTest(TracerTestCase):
             self.assertEqual(len(spans), 1)
             self.assertEqual(span.get_tag("aws.region"), "us-east-1")
             self.assertEqual(span.get_tag("aws.operation"), "SendMessage")
+            self.assertIsNone(span.get_tag("params.MessageBody"))
             assert_is_measured(span)
             assert_span_http_status_code(span, 200)
             self.assertEqual(span.service, "test-botocore-tracing.sqs")
@@ -254,6 +257,7 @@ class BotocoreTest(TracerTestCase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(span.get_tag("aws.region"), "us-east-1")
         self.assertEqual(span.get_tag("aws.operation"), "SendMessage")
+        self.assertIsNone(span.get_tag("params.MessageBody"))
         assert_is_measured(span)
         assert_span_http_status_code(span, 200)
         self.assertEqual(span.service, "test-botocore-tracing.sqs")
@@ -294,6 +298,7 @@ class BotocoreTest(TracerTestCase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(span.get_tag("aws.region"), "us-east-1")
         self.assertEqual(span.get_tag("aws.operation"), "SendMessage")
+        self.assertIsNone(span.get_tag("params.MessageBody"))
         assert_is_measured(span)
         assert_span_http_status_code(span, 200)
         self.assertEqual(span.service, "test-botocore-tracing.sqs")
@@ -324,6 +329,7 @@ class BotocoreTest(TracerTestCase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(span.get_tag("aws.region"), "us-east-1")
         self.assertEqual(span.get_tag("aws.operation"), "SendMessageBatch")
+        self.assertIsNone(span.get_tag("params.MessageBody"))
         assert_is_measured(span)
         assert_span_http_status_code(span, 200)
         self.assertEqual(span.service, "test-botocore-tracing.sqs")
@@ -366,6 +372,7 @@ class BotocoreTest(TracerTestCase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(span.get_tag("aws.region"), "us-east-1")
         self.assertEqual(span.get_tag("aws.operation"), "SendMessageBatch")
+        self.assertIsNone(span.get_tag("params.MessageBody"))
         assert_is_measured(span)
         assert_span_http_status_code(span, 200)
         self.assertEqual(span.service, "test-botocore-tracing.sqs")
@@ -409,6 +416,7 @@ class BotocoreTest(TracerTestCase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(span.get_tag("aws.region"), "us-east-1")
         self.assertEqual(span.get_tag("aws.operation"), "SendMessageBatch")
+        self.assertIsNone(span.get_tag("params.MessageBody"))
         assert_is_measured(span)
         assert_span_http_status_code(span, 200)
         self.assertEqual(span.service, "test-botocore-tracing.sqs")
@@ -708,3 +716,48 @@ class BotocoreTest(TracerTestCase):
             stubber.add_response("list_buckets", response, {})
             service_response = s3.list_buckets()
             assert service_response == response
+
+    @mock_kinesis
+    def test_firehose_no_records_arg(self):
+        firehose = self.session.create_client("firehose", region_name="us-west-2")
+        Pin(service=self.TEST_SERVICE, tracer=self.tracer).onto(firehose)
+
+        stream_name = "test-stream"
+        account_id = "test-account"
+
+        firehose.create_delivery_stream(
+            DeliveryStreamName=stream_name,
+            RedshiftDestinationConfiguration={
+                "RoleARN": "arn:aws:iam::{}:role/firehose_delivery_role".format(account_id),
+                "ClusterJDBCURL": "jdbc:redshift://host.amazonaws.com:5439/database",
+                "CopyCommand": {
+                    "DataTableName": "outputTable",
+                    "CopyOptions": "CSV DELIMITER ',' NULL '\\0'",
+                },
+                "Username": "username",
+                "Password": "password",
+                "S3Configuration": {
+                    "RoleARN": "arn:aws:iam::{}:role/firehose_delivery_role".format(account_id),
+                    "BucketARN": "arn:aws:s3:::kinesis-test",
+                    "Prefix": "myFolder/",
+                    "BufferingHints": {"SizeInMBs": 123, "IntervalInSeconds": 124},
+                    "CompressionFormat": "UNCOMPRESSED",
+                },
+            },
+        )
+
+        firehose.put_record_batch(
+            DeliveryStreamName=stream_name,
+            Records=[{"Data": "some data"}],
+        )
+
+        spans = self.get_spans()
+
+        assert spans
+        assert len(spans) == 2
+        assert all(span.name == "firehose.command" for span in spans)
+
+        delivery_stream_span, put_record_batch_span = spans
+        assert delivery_stream_span.get_tag("aws.operation") == "CreateDeliveryStream"
+        assert put_record_batch_span.get_tag("aws.operation") == "PutRecordBatch"
+        assert put_record_batch_span.get_tag("params.Records") is None
