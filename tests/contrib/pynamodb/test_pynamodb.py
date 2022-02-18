@@ -7,9 +7,8 @@ import pytest
 from ddtrace import Pin
 from ddtrace.contrib.pynamodb.patch import patch
 from ddtrace.contrib.pynamodb.patch import unpatch
-
-from ... import TracerTestCase
-from ... import assert_is_measured
+from tests.utils import TracerTestCase
+from tests.utils import assert_is_measured
 
 
 class PynamodbTest(TracerTestCase):
@@ -121,7 +120,7 @@ class PynamodbTest(TracerTestCase):
         assert span.get_tag("aws.agent") == "pynamodb"
         assert span.duration >= 0
         assert span.error == 1
-        assert span.meta["error.type"] != ""
+        assert span.get_tag("error.type") != ""
 
     @TracerTestCase.run_in_subprocess(env_overrides=dict(DD_SERVICE="mysvc"))
     @mock_dynamodb
@@ -185,7 +184,7 @@ class PynamodbTest(TracerTestCase):
 
         self.reset()
 
-        # Manual overide
+        # Manual override
         dynamodb_backend.create_table("Test", hash_key_attr="content", hash_key_type="S")
         Pin.override(self.conn, service="override-pynamodb", tracer=self.tracer)
         list_result = self.conn.list_tables()

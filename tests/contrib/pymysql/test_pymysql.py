@@ -1,16 +1,16 @@
 import pymysql
 
 from ddtrace import Pin
-from ddtrace.compat import PY2
-from ddtrace.compat import stringify
 from ddtrace.constants import ANALYTICS_SAMPLE_RATE_KEY
 from ddtrace.contrib.pymysql.patch import patch
 from ddtrace.contrib.pymysql.patch import unpatch
+from ddtrace.internal.compat import PY2
+from ddtrace.internal.compat import stringify
 from tests.opentracer.utils import init_tracer
+from tests.utils import TracerTestCase
+from tests.utils import assert_dict_issuperset
+from tests.utils import assert_is_measured
 
-from ... import TracerTestCase
-from ... import assert_dict_issuperset
-from ... import assert_is_measured
 from ...contrib.config import MYSQL_CONFIG
 
 
@@ -69,10 +69,10 @@ class PyMySQLCore(object):
         assert span.get_metric("out.port") == MYSQL_CONFIG.get("port")
         meta = {}
         meta.update(self.DB_INFO)
-        assert_dict_issuperset(span.meta, meta)
+        assert_dict_issuperset(span._get_tags(), meta)
 
     def test_simple_query_fetchall(self):
-        with self.override_config("dbapi2", dict(trace_fetch_methods=True)):
+        with self.override_config("pymysql", dict(trace_fetch_methods=True)):
             conn, tracer = self._get_conn_tracer()
 
             cursor = conn.cursor()
@@ -91,7 +91,7 @@ class PyMySQLCore(object):
             assert span.get_metric("out.port") == MYSQL_CONFIG.get("port")
             meta = {}
             meta.update(self.DB_INFO)
-            assert_dict_issuperset(span.meta, meta)
+            assert_dict_issuperset(span._get_tags(), meta)
 
             fetch_span = spans[1]
             assert fetch_span.name == "pymysql.query.fetchall"
@@ -109,7 +109,7 @@ class PyMySQLCore(object):
         self.assertEqual(spans[0].name, "pymysql.query")
 
     def test_query_with_several_rows_fetchall(self):
-        with self.override_config("dbapi2", dict(trace_fetch_methods=True)):
+        with self.override_config("pymysql", dict(trace_fetch_methods=True)):
             conn, tracer = self._get_conn_tracer()
 
             cursor = conn.cursor()
@@ -159,7 +159,7 @@ class PyMySQLCore(object):
         cursor.execute("drop table if exists dummy")
 
     def test_query_many_fetchall(self):
-        with self.override_config("dbapi2", dict(trace_fetch_methods=True)):
+        with self.override_config("pymysql", dict(trace_fetch_methods=True)):
             # tests that the executemany method is correctly wrapped.
             conn, tracer = self._get_conn_tracer()
 
@@ -240,7 +240,7 @@ class PyMySQLCore(object):
         assert span.get_metric("out.port") == MYSQL_CONFIG.get("port")
         meta = {}
         meta.update(self.DB_INFO)
-        assert_dict_issuperset(span.meta, meta)
+        assert_dict_issuperset(span._get_tags(), meta)
 
     def test_simple_query_ot(self):
         """OpenTracing version of test_simple_query."""
@@ -272,11 +272,11 @@ class PyMySQLCore(object):
         assert dd_span.get_metric("out.port") == MYSQL_CONFIG.get("port")
         meta = {}
         meta.update(self.DB_INFO)
-        assert_dict_issuperset(dd_span.meta, meta)
+        assert_dict_issuperset(dd_span._get_tags(), meta)
 
     def test_simple_query_ot_fetchall(self):
         """OpenTracing version of test_simple_query."""
-        with self.override_config("dbapi2", dict(trace_fetch_methods=True)):
+        with self.override_config("pymysql", dict(trace_fetch_methods=True)):
             conn, tracer = self._get_conn_tracer()
 
             ot_tracer = init_tracer("mysql_svc", tracer)
@@ -305,7 +305,7 @@ class PyMySQLCore(object):
             assert dd_span.get_metric("out.port") == MYSQL_CONFIG.get("port")
             meta = {}
             meta.update(self.DB_INFO)
-            assert_dict_issuperset(dd_span.meta, meta)
+            assert_dict_issuperset(dd_span._get_tags(), meta)
 
             assert fetch_span.name == "pymysql.query.fetchall"
 
@@ -343,7 +343,7 @@ class PyMySQLCore(object):
         self.assertIsNone(span.get_metric(ANALYTICS_SAMPLE_RATE_KEY))
 
     def test_analytics_with_rate(self):
-        with self.override_config("dbapi2", dict(analytics_enabled=True, analytics_sample_rate=0.5)):
+        with self.override_config("pymysql", dict(analytics_enabled=True, analytics_sample_rate=0.5)):
             conn, tracer = self._get_conn_tracer()
 
             cursor = conn.cursor()
@@ -357,7 +357,7 @@ class PyMySQLCore(object):
             self.assertEqual(span.get_metric(ANALYTICS_SAMPLE_RATE_KEY), 0.5)
 
     def test_analytics_without_rate(self):
-        with self.override_config("dbapi2", dict(analytics_enabled=True)):
+        with self.override_config("pymysql", dict(analytics_enabled=True)):
             conn, tracer = self._get_conn_tracer()
 
             cursor = conn.cursor()
@@ -416,7 +416,7 @@ class TestPyMysqlPatch(PyMySQLCore, TracerTestCase):
 
             meta = {}
             meta.update(self.DB_INFO)
-            assert_dict_issuperset(span.meta, meta)
+            assert_dict_issuperset(span._get_tags(), meta)
         finally:
             unpatch()
 

@@ -11,9 +11,11 @@ from .. import trace_utils
 from ...constants import ANALYTICS_SAMPLE_RATE_KEY
 from ...constants import SPAN_MEASURED_KEY
 from ...ext import SpanTypes
+from ...internal.utils import ArgumentError
+from ...internal.utils import get_argument_value
+from ...internal.utils.formats import deep_getattr
 from ...pin import Pin
-from ...utils.formats import deep_getattr
-from ...utils.wrappers import unwrap
+from ..trace_utils import unwrap
 
 
 # Pynamodb connection class
@@ -54,8 +56,8 @@ def patched_api_call(original_func, instance, args, kwargs):
 
         span.set_tag(SPAN_MEASURED_KEY)
 
-        if args and args[0]:
-            operation = args[0]
+        try:
+            operation = get_argument_value(args, kwargs, 0, "operation_name")
             span.resource = operation
 
             if args[1] and "TableName" in args[1]:
@@ -63,7 +65,7 @@ def patched_api_call(original_func, instance, args, kwargs):
                 span.set_tag("table_name", table_name)
                 span.resource = span.resource + " " + table_name
 
-        else:
+        except ArgumentError:
             span.resource = "Unknown"
             operation = None
 

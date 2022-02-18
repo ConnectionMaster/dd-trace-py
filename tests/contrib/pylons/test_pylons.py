@@ -8,14 +8,16 @@ from routes import url_for
 
 from ddtrace import config
 from ddtrace.constants import ANALYTICS_SAMPLE_RATE_KEY
+from ddtrace.constants import ERROR_MSG
+from ddtrace.constants import ERROR_STACK
+from ddtrace.constants import ERROR_TYPE
 from ddtrace.constants import SAMPLING_PRIORITY_KEY
 from ddtrace.contrib.pylons import PylonsTraceMiddleware
-from ddtrace.ext import errors
 from ddtrace.ext import http
-from tests import TracerTestCase
-from tests import assert_is_measured
-from tests import assert_span_http_status_code
 from tests.opentracer.utils import init_tracer
+from tests.utils import TracerTestCase
+from tests.utils import assert_is_measured
+from tests.utils import assert_span_http_status_code
 
 
 class PylonsTestCase(TracerTestCase):
@@ -59,10 +61,10 @@ class PylonsTestCase(TracerTestCase):
         assert span.error == 0
         assert span.get_tag(http.URL) == "http://localhost:80/raise_exception"
         assert_span_http_status_code(span, 200)
-        assert http.QUERY_STRING not in span.meta
-        assert span.get_tag(errors.ERROR_MSG) is None
-        assert span.get_tag(errors.ERROR_TYPE) is None
-        assert span.get_tag(errors.ERROR_STACK) is None
+        assert http.QUERY_STRING not in span._get_tags()
+        assert span.get_tag(ERROR_MSG) is None
+        assert span.get_tag(ERROR_TYPE) is None
+        assert span.get_tag(ERROR_STACK) is None
         assert span.span_type == "web"
 
     def test_mw_exc_success(self):
@@ -92,9 +94,9 @@ class PylonsTestCase(TracerTestCase):
         assert span.error == 0
         assert span.get_tag(http.URL) == "http://localhost:80/"
         assert_span_http_status_code(span, 200)
-        assert span.get_tag(errors.ERROR_MSG) is None
-        assert span.get_tag(errors.ERROR_TYPE) is None
-        assert span.get_tag(errors.ERROR_STACK) is None
+        assert span.get_tag(ERROR_MSG) is None
+        assert span.get_tag(ERROR_TYPE) is None
+        assert span.get_tag(ERROR_STACK) is None
 
     def test_middleware_exception(self):
         """Ensure exceptions raised in middleware are properly handled.
@@ -122,9 +124,9 @@ class PylonsTestCase(TracerTestCase):
         assert span.error == 1
         assert span.get_tag(http.URL) == "http://localhost:80/"
         assert_span_http_status_code(span, 500)
-        assert span.get_tag(errors.ERROR_MSG) == "Middleware exception"
-        assert span.get_tag(errors.ERROR_TYPE) == "exceptions.Exception"
-        assert span.get_tag(errors.ERROR_STACK)
+        assert span.get_tag(ERROR_MSG) == "Middleware exception"
+        assert span.get_tag(ERROR_TYPE) == "exceptions.Exception"
+        assert span.get_tag(ERROR_STACK)
 
     def test_exc_success(self):
         from .app.middleware import ExceptionToSuccessMiddleware
@@ -146,9 +148,9 @@ class PylonsTestCase(TracerTestCase):
         assert span.error == 0
         assert span.get_tag(http.URL) == "http://localhost:80/raise_exception"
         assert_span_http_status_code(span, 200)
-        assert span.get_tag(errors.ERROR_MSG) is None
-        assert span.get_tag(errors.ERROR_TYPE) is None
-        assert span.get_tag(errors.ERROR_STACK) is None
+        assert span.get_tag(ERROR_MSG) is None
+        assert span.get_tag(ERROR_TYPE) is None
+        assert span.get_tag(ERROR_STACK) is None
 
     def test_exc_client_failure(self):
         from .app.middleware import ExceptionToClientErrorMiddleware
@@ -170,9 +172,9 @@ class PylonsTestCase(TracerTestCase):
         assert span.error == 0
         assert span.get_tag(http.URL) == "http://localhost:80/raise_exception"
         assert_span_http_status_code(span, 404)
-        assert span.get_tag(errors.ERROR_MSG) is None
-        assert span.get_tag(errors.ERROR_TYPE) is None
-        assert span.get_tag(errors.ERROR_STACK) is None
+        assert span.get_tag(ERROR_MSG) is None
+        assert span.get_tag(ERROR_TYPE) is None
+        assert span.get_tag(ERROR_STACK) is None
 
     def test_success_200(self, query_string=""):
         if query_string:
@@ -192,9 +194,9 @@ class PylonsTestCase(TracerTestCase):
         assert span.resource == "root.index"
         assert_span_http_status_code(span, 200)
         if config.pylons.trace_query_string:
-            assert span.meta.get(http.QUERY_STRING) == query_string
+            assert span.get_tag(http.QUERY_STRING) == query_string
         else:
-            assert http.QUERY_STRING not in span.meta
+            assert http.QUERY_STRING not in span._get_tags()
         assert span.error == 0
 
     def test_query_string(self):
@@ -279,7 +281,7 @@ class PylonsTestCase(TracerTestCase):
 
         assert template.service == "web"
         assert template.resource == "pylons.render"
-        assert template.meta.get("template.name") == "/template.mako"
+        assert template.get_tag("template.name") == "/template.mako"
         assert template.error == 0
 
     def test_template_render_exception(self):
@@ -299,7 +301,7 @@ class PylonsTestCase(TracerTestCase):
 
         assert template.service == "web"
         assert template.resource == "pylons.render"
-        assert template.meta.get("template.name") == "/exception.mako"
+        assert template.get_tag("template.name") == "/exception.mako"
         assert template.error == 1
         assert template.get_tag("error.msg") == "integer division or modulo by zero"
         assert "ZeroDivisionError: integer division or modulo by zero" in template.get_tag("error.stack")
@@ -334,7 +336,7 @@ class PylonsTestCase(TracerTestCase):
         assert span.resource == "root.raise_wrong_code"
         assert span.error == 1
         assert_span_http_status_code(span, 500)
-        assert span.meta.get(http.URL) == "http://localhost:80/raise_wrong_code"
+        assert span.get_tag(http.URL) == "http://localhost:80/raise_wrong_code"
         assert span.get_tag("error.msg") == "Ouch!"
         assert "Exception: Ouch!" in span.get_tag("error.stack")
 
@@ -351,7 +353,7 @@ class PylonsTestCase(TracerTestCase):
         assert span.resource == "root.raise_custom_code"
         assert span.error == 1
         assert_span_http_status_code(span, 512)
-        assert span.meta.get(http.URL) == "http://localhost:80/raise_custom_code"
+        assert span.get_tag(http.URL) == "http://localhost:80/raise_custom_code"
         assert span.get_tag("error.msg") == "Ouch!"
         assert "Exception: Ouch!" in span.get_tag("error.stack")
 
@@ -368,11 +370,11 @@ class PylonsTestCase(TracerTestCase):
         assert span.resource == "root.raise_code_method"
         assert span.error == 1
         assert_span_http_status_code(span, 500)
-        assert span.meta.get(http.URL) == "http://localhost:80/raise_code_method"
+        assert span.get_tag(http.URL) == "http://localhost:80/raise_code_method"
         assert span.get_tag("error.msg") == "Ouch!"
 
     def test_distributed_tracing_default(self):
-        # ensure by default, distributed tracing is not enabled
+        # ensure by default, distributed tracing is enabled
         headers = {
             "x-datadog-trace-id": "100",
             "x-datadog-parent-id": "42",
@@ -390,10 +392,28 @@ class PylonsTestCase(TracerTestCase):
         assert span.parent_id == 42
         assert span.get_metric(SAMPLING_PRIORITY_KEY) == 2
 
-    def test_distributed_tracing_disabled(self):
-        # ensure distributed tracing propagator is working
-        middleware = self.app.app
-        middleware._distributed_tracing = False
+    def test_distributed_tracing_disabled_via_int_config(self):
+        config.pylons["distributed_tracing"] = False
+        headers = {
+            "x-datadog-trace-id": "100",
+            "x-datadog-parent-id": "42",
+            "x-datadog-sampling-priority": "2",
+        }
+
+        res = self.app.get(url_for(controller="root", action="index"), headers=headers)
+        assert res.status == 200
+
+        spans = self.pop_spans()
+        assert spans, spans
+        assert len(spans) == 1
+        span = spans[0]
+
+        assert span.trace_id != 100
+        assert span.parent_id != 42
+        assert span.get_metric(SAMPLING_PRIORITY_KEY) != 2
+
+    @TracerTestCase.run_in_subprocess(env_overrides=dict(DD_PYLONS_DISTRIBUTED_TRACING="False"))
+    def test_distributed_tracing_disabled_via_env_var(self):
         headers = {
             "x-datadog-trace-id": "100",
             "x-datadog-parent-id": "42",
@@ -435,7 +455,7 @@ class PylonsTestCase(TracerTestCase):
         assert dd_span.service == "web"
         assert dd_span.resource == "root.index"
         assert_span_http_status_code(dd_span, 200)
-        assert dd_span.meta.get(http.URL) == "http://localhost:80/"
+        assert dd_span.get_tag(http.URL) == "http://localhost:80/"
         assert dd_span.error == 0
 
     def test_request_headers(self):

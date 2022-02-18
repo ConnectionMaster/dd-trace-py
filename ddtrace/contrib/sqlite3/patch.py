@@ -1,14 +1,14 @@
-# 3p
+import os
 import sqlite3
 import sqlite3.dbapi2
 
 from ddtrace import config
 from ddtrace.vendor import wrapt
 
-# project
 from ...contrib.dbapi import FetchTracedCursor
 from ...contrib.dbapi import TracedConnection
 from ...contrib.dbapi import TracedCursor
+from ...internal.utils.formats import asbool
 from ...pin import Pin
 
 
@@ -19,6 +19,8 @@ config._add(
     "sqlite",
     dict(
         _default_service="sqlite",
+        _dbapi_span_name_prefix="sqlite",
+        trace_fetch_methods=asbool(os.getenv("DD_SQLITE_TRACE_FETCH_METHODS", default=False)),
     ),
 )
 
@@ -42,7 +44,7 @@ def traced_connect(func, _, args, kwargs):
 
 def patch_conn(conn):
     wrapped = TracedSQLite(conn)
-    Pin(app="sqlite").onto(wrapped)
+    Pin().onto(wrapped)
     return wrapped
 
 
@@ -66,9 +68,7 @@ class TracedSQLite(TracedConnection):
     def __init__(self, conn, pin=None, cursor_cls=None):
         if not cursor_cls:
             # Do not trace `fetch*` methods by default
-            cursor_cls = TracedSQLiteCursor
-            if config.dbapi2.trace_fetch_methods:
-                cursor_cls = TracedSQLiteFetchCursor
+            cursor_cls = TracedSQLiteFetchCursor if config.sqlite.trace_fetch_methods else TracedSQLiteCursor
 
             super(TracedSQLite, self).__init__(conn, pin=pin, cfg=config.sqlite, cursor_cls=cursor_cls)
 

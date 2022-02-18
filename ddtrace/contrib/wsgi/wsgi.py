@@ -1,6 +1,6 @@
 import sys
 
-from ddtrace.compat import PY2
+from ddtrace.internal.compat import PY2
 
 
 if PY2:
@@ -13,15 +13,15 @@ else:
     generatorExit = builtins.GeneratorExit
 
 
+import six
 from six.moves.urllib.parse import quote
 
 import ddtrace
 from ddtrace import config
 from ddtrace.ext import SpanTypes
 from ddtrace.internal.logger import get_logger
+from ddtrace.propagation._utils import from_wsgi_header
 from ddtrace.propagation.http import HTTPPropagator
-from ddtrace.propagation.utils import from_wsgi_header
-from ddtrace.vendor import six
 
 from .. import trace_utils
 
@@ -97,9 +97,10 @@ class DDWSGIMiddleware(object):
     def __call__(self, environ, start_response):
         def intercept_start_response(status, response_headers, exc_info=None):
             span = self.tracer.current_root_span()
-            status_code, status_msg = status.split(" ", 1)
-            span.set_tag("http.status_msg", status_msg)
-            trace_utils.set_http_meta(span, config.wsgi, status_code=status_code, response_headers=response_headers)
+            if span is not None:
+                status_code, status_msg = status.split(" ", 1)
+                span.set_tag("http.status_msg", status_msg)
+                trace_utils.set_http_meta(span, config.wsgi, status_code=status_code, response_headers=response_headers)
             with self.tracer.trace(
                 "wsgi.start_response",
                 service=trace_utils.int_service(None, config.wsgi),
@@ -108,10 +109,7 @@ class DDWSGIMiddleware(object):
                 write = start_response(status, response_headers, exc_info)
             return write
 
-        if config.wsgi.distributed_tracing:
-            ctx = propagator.extract(environ)
-            if ctx.trace_id:
-                self.tracer.context_provider.activate(ctx)
+        trace_utils.activate_distributed_headers(self.tracer, int_config=config.wsgi, request_headers=environ)
 
         with self.tracer.trace(
             "wsgi.request",
@@ -129,7 +127,7 @@ class DDWSGIMiddleware(object):
                 if hasattr(result, "__class__"):
                     resp_class = getattr(getattr(result, "__class__"), "__name__", None)
                     if resp_class:
-                        resp_span.meta["result_class"] = resp_class
+                        resp_span._set_str_tag("result_class", resp_class)
 
                 for chunk in result:
                     yield chunk

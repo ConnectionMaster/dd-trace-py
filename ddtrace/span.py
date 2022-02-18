@@ -1,4 +1,5 @@
 import math
+import pprint
 import sys
 import traceback
 from typing import Any
@@ -6,36 +7,43 @@ from typing import Callable
 from typing import Dict
 from typing import List
 from typing import Optional
-from typing import TYPE_CHECKING
+from typing import Text
 from typing import Union
 
-from .compat import StringIO
-from .compat import is_integer
-from .compat import iteritems
-from .compat import numeric_types
-from .compat import stringify
-from .compat import time_ns
+import six
+
+from . import config
+from .constants import ANALYTICS_SAMPLE_RATE_KEY
+from .constants import ERROR_MSG
+from .constants import ERROR_STACK
+from .constants import ERROR_TYPE
 from .constants import MANUAL_DROP_KEY
 from .constants import MANUAL_KEEP_KEY
-from .constants import NUMERIC_TAGS
 from .constants import SERVICE_KEY
 from .constants import SERVICE_VERSION_KEY
 from .constants import SPAN_MEASURED_KEY
+from .constants import USER_KEEP
+from .constants import USER_REJECT
 from .constants import VERSION_KEY
-from .ext import SpanTypes
-from .ext import errors
+from .context import Context
 from .ext import http
 from .ext import net
-from .ext import priority
 from .internal import _rand
+from .internal.compat import NumericType
+from .internal.compat import StringIO
+from .internal.compat import ensure_text
+from .internal.compat import is_integer
+from .internal.compat import iteritems
+from .internal.compat import numeric_types
+from .internal.compat import stringify
+from .internal.compat import time_ns
 from .internal.logger import get_logger
-from .vendor import six
 
 
-if TYPE_CHECKING:
-    from .context import Context
-    from .tracer import Tracer
-
+_NUMERIC_TAGS = (ANALYTICS_SAMPLE_RATE_KEY,)
+_TagNameType = Union[Text, bytes]
+_MetaDictType = Dict[_TagNameType, Text]
+_MetricDictType = Dict[_TagNameType, NumericType]
 
 log = get_logger(__name__)
 
@@ -46,21 +54,21 @@ class Span(object):
         # Public span attributes
         "service",
         "name",
-        "resource",
+        "_resource",
         "span_id",
         "trace_id",
         "parent_id",
-        "meta",
+        "_meta",
         "error",
-        "metrics",
-        "_span_type",
+        "_metrics",
+        "span_type",
         "start_ns",
         "duration_ns",
-        "tracer",
         # Sampler attributes
         "sampled",
         # Internal attributes
         "_context",
+        "_local_root",
         "_parent",
         "_ignored_exceptions",
         "_on_finish_callbacks",
@@ -69,7 +77,6 @@ class Span(object):
 
     def __init__(
         self,
-        tracer,  # type: Optional[Tracer]
         name,  # type: str
         service=None,  # type: Optional[str]
         resource=None,  # type: Optional[str]
@@ -79,15 +86,16 @@ class Span(object):
         parent_id=None,  # type: Optional[int]
         start=None,  # type: Optional[int]
         context=None,  # type: Optional[Context]
-        on_finish=None,  # type: List[Callable[[Span], None]]
-        _check_pid=True,  # type: bool
+        on_finish=None,  # type: Optional[List[Callable[[Span], None]]]
     ):
         # type: (...) -> None
         """
         Create a new span. Call `finish` once the traced operation is over.
 
-        :param ddtrace.Tracer tracer: the tracer that will submit this span when
-            finished.
+        **Note:** A ``Span`` should only be accessed or modified in the process
+        that it was created in. Using a ``Span`` from within a child process
+        could result in a deadlock or unexpected behavior.
+
         :param str name: the name of the traced operation.
 
         :param str service: the service name
@@ -102,35 +110,42 @@ class Span(object):
         :param object context: the Context of the span.
         :param on_finish: list of functions called when the span finishes.
         """
+        # pre-conditions
+        if not (span_id is None or isinstance(span_id, six.integer_types)):
+            raise TypeError("span_id must be an integer")
+        if not (trace_id is None or isinstance(trace_id, six.integer_types)):
+            raise TypeError("trace_id must be an integer")
+        if not (parent_id is None or isinstance(parent_id, six.integer_types)):
+            raise TypeError("parent_id must be an integer")
+
         # required span info
         self.name = name
         self.service = service
-        self.resource = resource or name
-        self._span_type = None
+        self._resource = [resource or name]
         self.span_type = span_type
 
         # tags / metadata
-        self.meta = {}  # type: Dict[str, Any]
+        self._meta = {}  # type: _MetaDictType
         self.error = 0
-        self.metrics = {}  # type: Dict[str, Any]
+        self._metrics = {}  # type: _MetricDictType
 
         # timing
-        self.start_ns = time_ns() if start is None else int(start * 1e9)
+        self.start_ns = time_ns() if start is None else int(start * 1e9)  # type: int
         self.duration_ns = None  # type: Optional[int]
 
         # tracing
-        self.trace_id = trace_id or _rand.rand64bits(check_pid=_check_pid)  # type: int
-        self.span_id = span_id or _rand.rand64bits(check_pid=_check_pid)  # type: int
+        self.trace_id = trace_id or _rand.rand64bits()  # type: int
+        self.span_id = span_id or _rand.rand64bits()  # type: int
         self.parent_id = parent_id  # type: Optional[int]
-        self.tracer = tracer
         self._on_finish_callbacks = [] if on_finish is None else on_finish
 
         # sampling
         self.sampled = True  # type: bool
 
-        self._context = context  # type: Optional[Context]
+        self._context = context._with_span(self) if context else None  # type: Optional[Context]
         self._parent = None  # type: Optional[Span]
         self._ignored_exceptions = None  # type: Optional[List[Exception]]
+        self._local_root = None  # type: Optional[Span]
 
     def _ignore_exception(self, exc):
         # type: (Exception) -> None
@@ -151,12 +166,12 @@ class Span(object):
         self.start_ns = int(value * 1e9)
 
     @property
-    def span_type(self):
-        return self._span_type
+    def resource(self):
+        return self._resource[0]
 
-    @span_type.setter
-    def span_type(self, value):
-        self._span_type = value.value if isinstance(value, SpanTypes) else value
+    @resource.setter
+    def resource(self, value):
+        self._resource[0] = value
 
     @property
     def finished(self):
@@ -191,31 +206,24 @@ class Span(object):
         self.duration_ns = int(value * 1e9)
 
     def finish(self, finish_time=None):
-        # type: (Optional[int]) -> None
+        # type: (Optional[float]) -> None
         """Mark the end time of the span and submit it to the tracer.
-        If the span has already been finished don't do anything
+        If the span has already been finished don't do anything.
 
-        :param int finish_time: The end time of the span in seconds.
-                                Defaults to now.
+        :param finish_time: The end time of the span, in seconds. Defaults to ``now``.
         """
-        if self.finished:
+        if self.duration_ns is not None:
             return
 
-        if self.duration_ns is None:
-            ft = time_ns() if finish_time is None else int(finish_time * 1e9)
-            # be defensive so we don't die if start isn't set
-            self.duration_ns = ft - (self.start_ns or ft)
-
-        if self._context:
-            trace, sampled = self._context.close_span(self)
-            if self.tracer and trace and sampled:
-                self.tracer.write(trace)
+        ft = time_ns() if finish_time is None else int(finish_time * 1e9)
+        # be defensive so we don't die if start isn't set
+        self.duration_ns = ft - (self.start_ns or ft)
 
         for cb in self._on_finish_callbacks:
             cb(self)
 
     def set_tag(self, key, value=None):
-        # type: (str, Any) -> None
+        # type: (_TagNameType, Any) -> None
         """Set a tag key/value pair on the span.
 
         Keys must be strings, values must be ``stringify``-able.
@@ -244,13 +252,13 @@ class Span(object):
         INT_TYPES = (net.TARGET_PORT,)
         if key in INT_TYPES and not val_is_an_int:
             try:
-                value = int(value)  # type: ignore[arg-type]
+                value = int(value)
                 val_is_an_int = True
             except (ValueError, TypeError):
                 pass
 
         # Set integers that are less than equal to 2^53 as metrics
-        if val_is_an_int and abs(value) <= 2 ** 53:  # type: ignore[arg-type]
+        if value is not None and val_is_an_int and abs(value) <= 2 ** 53:
             self.set_metric(key, value)
             return
 
@@ -260,7 +268,11 @@ class Span(object):
             return
 
         # Key should explicitly be converted to a float if needed
-        elif key in NUMERIC_TAGS:
+        elif key in _NUMERIC_TAGS:
+            if value is None:
+                log.debug("ignoring not number metric %s:%s", key, value)
+                return
+
             try:
                 # DEV: `set_metric` will try to cast to `float()` for us
                 self.set_metric(key, value)
@@ -270,10 +282,10 @@ class Span(object):
             return
 
         elif key == MANUAL_KEEP_KEY:
-            self.context.sampling_priority = priority.USER_KEEP
+            self.context.sampling_priority = USER_KEEP
             return
         elif key == MANUAL_DROP_KEY:
-            self.context.sampling_priority = priority.USER_REJECT
+            self.context.sampling_priority = USER_REJECT
             return
         elif key == SERVICE_KEY:
             self.service = value
@@ -290,28 +302,42 @@ class Span(object):
             return
 
         try:
-            self.meta[key] = stringify(value)
-            if key in self.metrics:
-                del self.metrics[key]
+            self._meta[key] = stringify(value)
+            if key in self._metrics:
+                del self._metrics[key]
         except Exception:
             log.warning("error setting tag %s, ignoring it", key, exc_info=True)
 
     def _set_str_tag(self, key, value):
-        # type: (str, str) -> None
-        self.meta[key] = stringify(value)
+        # type: (_TagNameType, Text) -> None
+        """Set a value for a tag. Values are coerced to unicode in Python 2 and
+        str in Python 3, with decoding errors in conversion being replaced with
+        U+FFFD.
+        """
+        try:
+            self._meta[key] = ensure_text(value, errors="replace")
+        except Exception as e:
+            if config._raise:
+                raise e
+            log.warning("Failed to set text tag '%s'", key, exc_info=True)
 
     def _remove_tag(self, key):
-        # type: (str) -> None
-        if key in self.meta:
-            del self.meta[key]
+        # type: (_TagNameType) -> None
+        if key in self._meta:
+            del self._meta[key]
 
     def get_tag(self, key):
-        # type: (str) -> Optional[str]
+        # type: (_TagNameType) -> Optional[Text]
         """Return the given tag or None if it doesn't exist."""
-        return self.meta.get(key, None)
+        return self._meta.get(key, None)
+
+    def _get_tags(self):
+        # type: () -> _MetaDictType
+        """Return all tags."""
+        return self._meta.copy()
 
     def set_tags(self, tags):
-        # type: (Dict[str, Any]) -> None
+        # type: (_MetaDictType) -> None
         """Set a dictionary of tags on the given span. Keys and values
         must be strings (or stringable)
         """
@@ -319,18 +345,9 @@ class Span(object):
             for k, v in iter(tags.items()):
                 self.set_tag(k, v)
 
-    def set_meta(self, k, v):
-        # type: (str, Any) -> None
-        self.set_tag(k, v)
-
-    def set_metas(self, kvs):
-        # type: (Dict[str, Any]) -> None
-        self.set_tags(kvs)
-
     def set_metric(self, key, value):
-        # type: (str, Any) -> None
-        # This method sets a numeric tag value for the given key. It acts
-        # like `set_meta()` and it simply add a tag without further processing.
+        # type: (_TagNameType, NumericType) -> None
+        # This method sets a numeric tag value for the given key.
 
         # Enforce a specific connstant for `_dd.measured`
         if key == SPAN_MEASURED_KEY:
@@ -356,19 +373,23 @@ class Span(object):
             log.debug("ignoring not real metric %s:%s", key, value)
             return
 
-        if key in self.meta:
-            del self.meta[key]
-        self.metrics[key] = value
+        if key in self._meta:
+            del self._meta[key]
+        self._metrics[key] = value
 
     def set_metrics(self, metrics):
-        # type: (Dict[str, Any]) -> None
+        # type: (_MetricDictType) -> None
         if metrics:
             for k, v in iteritems(metrics):
                 self.set_metric(k, v)
 
     def get_metric(self, key):
-        # type: (str) -> Any
-        return self.metrics.get(key)
+        # type: (_TagNameType) -> Optional[NumericType]
+        return self._metrics.get(key)
+
+    def _get_metrics(self):
+        # type: () -> _MetricDictType
+        return self._metrics.copy()
 
     def to_dict(self):
         # type: () -> Dict[str, Any]
@@ -395,11 +416,11 @@ class Span(object):
         if self.duration_ns:
             d["duration"] = self.duration_ns
 
-        if self.meta:
-            d["meta"] = self.meta  # type: ignore[assignment]
+        if self._meta:
+            d["meta"] = self._meta
 
-        if self.metrics:
-            d["metrics"] = self.metrics  # type: ignore[assignment]
+        if self._metrics:
+            d["metrics"] = self._metrics
 
         if self.span_type:
             d["type"] = self.span_type
@@ -417,11 +438,11 @@ class Span(object):
             self.set_exc_info(exc_type, exc_val, exc_tb)
         else:
             tb = "".join(traceback.format_stack(limit=limit + 1)[:-1])
-            self.meta[errors.ERROR_STACK] = tb
+            self._meta[ERROR_STACK] = tb
 
     def set_exc_info(self, exc_type, exc_val, exc_tb):
         # type: (Any, Any, Any) -> None
-        """ Tag the span with an error tuple as from `sys.exc_info()`. """
+        """Tag the span with an error tuple as from `sys.exc_info()`."""
         if not (exc_type and exc_val and exc_tb):
             return  # nothing to do
 
@@ -438,22 +459,22 @@ class Span(object):
         # readable version of type (e.g. exceptions.ZeroDivisionError)
         exc_type_str = "%s.%s" % (exc_type.__module__, exc_type.__name__)
 
-        self.meta[errors.ERROR_MSG] = str(exc_val)
-        self.meta[errors.ERROR_TYPE] = exc_type_str
-        self.meta[errors.ERROR_STACK] = tb
+        self._meta[ERROR_MSG] = stringify(exc_val)
+        self._meta[ERROR_TYPE] = exc_type_str
+        self._meta[ERROR_STACK] = tb
 
     def _remove_exc_info(self):
         # type: () -> None
-        """ Remove all exception related information from the span. """
+        """Remove all exception related information from the span."""
         self.error = 0
-        self._remove_tag(errors.ERROR_MSG)
-        self._remove_tag(errors.ERROR_TYPE)
-        self._remove_tag(errors.ERROR_STACK)
+        self._remove_tag(ERROR_MSG)
+        self._remove_tag(ERROR_TYPE)
+        self._remove_tag(ERROR_STACK)
 
-    def pprint(self):
+    def _pprint(self):
         # type: () -> str
-        """ Return a human readable version of the span. """
-        lines = [
+        """Return a human readable version of the span."""
+        data = [
             ("name", self.name),
             ("id", self.span_id),
             ("trace_id", self.trace_id),
@@ -462,22 +483,24 @@ class Span(object):
             ("resource", self.resource),
             ("type", self.span_type),
             ("start", self.start),
-            ("end", "" if not self.duration else self.start + self.duration),
-            ("duration", "%fs" % (self.duration or 0)),
+            ("end", None if not self.duration else self.start + self.duration),
+            ("duration", self.duration),
             ("error", self.error),
-            ("tags", ""),
+            ("tags", dict(sorted(self._meta.items()))),
+            ("metrics", dict(sorted(self._metrics.items()))),
         ]
-
-        lines.extend((" ", "%s:%s" % kv) for kv in sorted(self.meta.items()))
-        return "\n".join("%10s %s" % line for line in lines)
+        return " ".join(
+            # use a large column width to keep pprint output on one line
+            "%s=%s" % (k, pprint.pformat(v, width=1024 ** 2).strip())
+            for (k, v) in data
+        )
 
     @property
     def context(self):
-        """
-        Property that provides access to the ``Context`` associated with this ``Span``.
-        The ``Context`` contains state that propagates from span to span in a
-        larger trace.
-        """
+        # type: () -> Context
+        """Return the trace context for this span."""
+        if self._context is None:
+            self._context = Context(trace_id=self.trace_id, span_id=self.span_id)
         return self._context
 
     def __enter__(self):

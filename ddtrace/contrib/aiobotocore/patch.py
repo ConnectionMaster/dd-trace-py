@@ -1,5 +1,3 @@
-import asyncio
-
 import aiobotocore.client
 
 from ddtrace import config
@@ -12,15 +10,17 @@ except ImportError:
     # aiobotocore>=0.11.0
     from aiobotocore._endpoint_helpers import ClientResponseContentProxy
 
-from ...compat import PYTHON_VERSION_INFO
 from ...constants import ANALYTICS_SAMPLE_RATE_KEY
 from ...constants import SPAN_MEASURED_KEY
 from ...ext import SpanTypes
 from ...ext import aws
 from ...ext import http
+from ...internal.compat import PYTHON_VERSION_INFO
+from ...internal.utils import ArgumentError
+from ...internal.utils import get_argument_value
+from ...internal.utils.formats import deep_getattr
 from ...pin import Pin
-from ...utils.formats import deep_getattr
-from ...utils.wrappers import unwrap
+from ..trace_utils import unwrap
 
 
 ARGS_NAME = ("action", "params", "path", "verb")
@@ -33,7 +33,7 @@ def patch():
     setattr(aiobotocore.client, "_datadog_patch", True)
 
     wrapt.wrap_function_wrapper("aiobotocore.client", "AioBaseClient._make_api_call", _wrapped_api_call)
-    Pin(service=config.service or "aws", app="aws").onto(aiobotocore.client.AioBaseClient)
+    Pin(service=config.service or "aws").onto(aiobotocore.client.AioBaseClient)
 
 
 def unpatch():
@@ -48,8 +48,7 @@ class WrappedClientResponseContentProxy(wrapt.ObjectProxy):
         self._self_pin = pin
         self._self_parent_span = parent_span
 
-    @asyncio.coroutine
-    def read(self, *args, **kwargs):
+    async def read(self, *args, **kwargs):
         # async read that must be child of the parent span operation
         operation_name = "{}.read".format(self._self_parent_span.name)
 
@@ -57,10 +56,10 @@ class WrappedClientResponseContentProxy(wrapt.ObjectProxy):
             # inherit parent attributes
             span.resource = self._self_parent_span.resource
             span.span_type = self._self_parent_span.span_type
-            span.meta = dict(self._self_parent_span.meta)
-            span.metrics = dict(self._self_parent_span.metrics)
+            span._meta = dict(self._self_parent_span._meta)
+            span._metrics = dict(self._self_parent_span.metrics)
 
-            result = yield from self.__wrapped__.read(*args, **kwargs)
+            result = await self.__wrapped__.read(*args, **kwargs)
             span.set_tag("Length", len(result))
 
         return result
@@ -68,23 +67,20 @@ class WrappedClientResponseContentProxy(wrapt.ObjectProxy):
     # wrapt doesn't proxy `async with` context managers
     if PYTHON_VERSION_INFO >= (3, 5, 0):
 
-        @asyncio.coroutine
-        def __aenter__(self):
+        async def __aenter__(self):
             # call the wrapped method but return the object proxy
-            yield from self.__wrapped__.__aenter__()
+            await self.__wrapped__.__aenter__()
             return self
 
-        @asyncio.coroutine
-        def __aexit__(self, *args, **kwargs):
-            response = yield from self.__wrapped__.__aexit__(*args, **kwargs)
+        async def __aexit__(self, *args, **kwargs):
+            response = await self.__wrapped__.__aexit__(*args, **kwargs)
             return response
 
 
-@asyncio.coroutine
-def _wrapped_api_call(original_func, instance, args, kwargs):
+async def _wrapped_api_call(original_func, instance, args, kwargs):
     pin = Pin.get_from(instance)
     if not pin or not pin.enabled():
-        result = yield from original_func(*args, **kwargs)
+        result = await original_func(*args, **kwargs)
         return result
 
     endpoint_name = deep_getattr(instance, "_endpoint._endpoint_prefix")
@@ -93,10 +89,10 @@ def _wrapped_api_call(original_func, instance, args, kwargs):
     with pin.tracer.trace("{}.command".format(endpoint_name), service=service, span_type=SpanTypes.HTTP) as span:
         span.set_tag(SPAN_MEASURED_KEY)
 
-        if len(args) > 0:
-            operation = args[0]
+        try:
+            operation = get_argument_value(args, kwargs, 0, "operation_name")
             span.resource = "{}.{}".format(endpoint_name, operation.lower())
-        else:
+        except ArgumentError:
             operation = None
             span.resource = endpoint_name
 
@@ -111,7 +107,7 @@ def _wrapped_api_call(original_func, instance, args, kwargs):
         }
         span.set_tags(meta)
 
-        result = yield from original_func(*args, **kwargs)
+        result = await original_func(*args, **kwargs)
 
         body = result.get("Body")
         if isinstance(body, ClientResponseContentProxy):

@@ -26,6 +26,14 @@ Global Configuration
 
    Default: ``"mysql"``
 
+.. py:data:: ddtrace.config.mysql["trace_fetch_methods"]
+
+   Whether or not to trace fetch methods.
+
+   Can also configured via the ``DD_MYSQL_TRACE_FETCH_METHODS`` environment variable.
+
+   Default: ``False``
+
 
 Instance Configuration
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -54,7 +62,7 @@ provided by _mysql_connector, is not supported.
 Help on mysql.connector can be found on:
 https://dev.mysql.com/doc/connector-python/en/
 """
-from ...utils.importlib import require_modules
+from ...internal.utils.importlib import require_modules
 
 
 # check `mysql-connector` availability
@@ -63,6 +71,5 @@ required_modules = ["mysql.connector"]
 with require_modules(required_modules) as missing_modules:
     if not missing_modules:
         from .patch import patch
-        from .tracers import get_traced_mysql_connection
 
-        __all__ = ["get_traced_mysql_connection", "patch"]
+        __all__ = ["patch"]

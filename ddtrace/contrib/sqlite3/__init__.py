@@ -26,6 +26,14 @@ Global Configuration
 
    Default: ``"sqlite"``
 
+.. py:data:: ddtrace.config.sqlite["trace_fetch_methods"]
+
+   Whether or not to trace fetch methods.
+
+   Can also configured via the ``DD_SQLITE_TRACE_FETCH_METHODS`` environment variable.
+
+   Default: ``False``
+
 
 Instance Configuration
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -45,8 +53,7 @@ To configure the integration on an per-connection basis use the
     cursor = db.cursor()
     cursor.execute("select * from users where id = 1")
 """
-from .connection import connection_factory
 from .patch import patch
 
 
-__all__ = ["connection_factory", "patch"]
+__all__ = ["patch"]

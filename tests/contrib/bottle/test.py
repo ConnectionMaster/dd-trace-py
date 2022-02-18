@@ -2,16 +2,15 @@ import bottle
 import webtest
 
 import ddtrace
-from ddtrace import compat
 from ddtrace import config
 from ddtrace.constants import ANALYTICS_SAMPLE_RATE_KEY
 from ddtrace.contrib.bottle import TracePlugin
 from ddtrace.ext import http
+from ddtrace.internal import compat
 from tests.opentracer.utils import init_tracer
-
-from ... import TracerTestCase
-from ... import assert_is_measured
-from ... import assert_span_http_status_code
+from tests.utils import TracerTestCase
+from tests.utils import assert_is_measured
+from tests.utils import assert_span_http_status_code
 
 
 SERVICE = "bottle-app"
@@ -72,7 +71,7 @@ class TraceBottleTest(TracerTestCase):
         if ddtrace.config.bottle.trace_query_string:
             assert s.get_tag(http.QUERY_STRING) == query_string
         else:
-            assert http.QUERY_STRING not in s.meta
+            assert http.QUERY_STRING not in s._get_tags()
 
     def test_query_string(self):
         return self.test_200("foo=bar")

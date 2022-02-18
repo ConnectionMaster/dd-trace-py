@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
+import json
+
 import flask
 from flask import abort
+from flask import jsonify
 from flask import make_response
 
-from ddtrace.compat import PY2
 from ddtrace.constants import ANALYTICS_SAMPLE_RATE_KEY
 from ddtrace.contrib.flask.patch import flask_version
 from ddtrace.ext import http
+from ddtrace.internal.compat import PY2
 from ddtrace.propagation.http import HTTP_HEADER_PARENT_ID
 from ddtrace.propagation.http import HTTP_HEADER_TRACE_ID
+from tests.utils import assert_is_measured
+from tests.utils import assert_span_http_status_code
 
 from . import BaseFlaskTestCase
-from ... import assert_is_measured
-from ... import assert_span_http_status_code
 
 
 base_exception_name = "builtins.Exception"
@@ -73,7 +76,7 @@ class FlaskRequestTestCase(BaseFlaskTestCase):
         self.assertEqual(req_span.get_tag("http.method"), "GET")
         self.assertEqual(req_span.get_tag(http.URL), "http://localhost/")
         assert_span_http_status_code(req_span, 200)
-        assert http.QUERY_STRING not in req_span.meta
+        assert http.QUERY_STRING not in req_span._get_tags()
 
         # Handler span
         handler_span = spans[4]
@@ -81,6 +84,50 @@ class FlaskRequestTestCase(BaseFlaskTestCase):
         self.assertEqual(handler_span.name, "tests.contrib.flask.test_request.index")
         self.assertEqual(handler_span.resource, "/")
         self.assertEqual(req_span.error, 0)
+
+    def test_route_params_request(self):
+        """
+        When making a request to an endpoint with non-string url params
+            We create the expected spans
+        """
+
+        @self.app.route("/route_params/<first>/<int:second>/<float:third>/<path:fourth>")
+        def route_params(first, second, third, fourth):
+            return jsonify(
+                {
+                    "first": first,
+                    "second": second,
+                    "third": third,
+                    "fourth": fourth,
+                }
+            )
+
+        res = self.client.get("/route_params/test/100/5.5/some/sub/path")
+        self.assertEqual(res.status_code, 200)
+        if isinstance(res.data, bytes):
+            data = json.loads(res.data.decode())
+        else:
+            data = json.loads(res.data)
+
+        assert data == {
+            "first": "test",
+            "second": 100,
+            "third": 5.5,
+            "fourth": "some/sub/path",
+        }
+
+        spans = self.get_spans()
+        self.assertEqual(len(spans), 8)
+
+        root = spans[0]
+        assert root.name == "flask.request"
+        assert root.get_tag(http.URL) == "http://localhost/route_params/test/100/5.5/some/sub/path"
+        assert root.get_tag("flask.endpoint") == "route_params"
+        assert root.get_tag("flask.url_rule") == "/route_params/<first>/<int:second>/<float:third>/<path:fourth>"
+        assert root.get_tag("flask.view_args.first") == "test"
+        assert root.get_metric("flask.view_args.second") == 100.0
+        assert root.get_metric("flask.view_args.third") == 5.5
+        assert root.get_tag("flask.view_args.fourth") == "some/sub/path"
 
     def test_request_query_string_trace(self):
         """Make sure when making a request that we create the expected spans and capture the query string."""
@@ -463,10 +510,10 @@ class FlaskRequestTestCase(BaseFlaskTestCase):
         self.assertEqual(dispatch_span.service, "flask")
         self.assertEqual(dispatch_span.name, "flask.dispatch_request")
         self.assertEqual(dispatch_span.resource, "flask.dispatch_request")
-        self.assertEqual(dispatch_span.error, 1)
-        self.assertTrue(dispatch_span.get_tag("error.msg").startswith("404 Not Found"))
-        self.assertTrue(dispatch_span.get_tag("error.stack").startswith("Traceback"))
-        self.assertEqual(dispatch_span.get_tag("error.type"), "werkzeug.exceptions.NotFound")
+        self.assertEqual(dispatch_span.error, 0)
+        self.assertIsNone(dispatch_span.get_tag("error.msg"))
+        self.assertIsNone(dispatch_span.get_tag("error.stack"))
+        self.assertIsNone(dispatch_span.get_tag("error.type"))
 
     def test_request_abort_404(self):
         """
@@ -529,10 +576,10 @@ class FlaskRequestTestCase(BaseFlaskTestCase):
         self.assertEqual(dispatch_span.service, "flask")
         self.assertEqual(dispatch_span.name, "flask.dispatch_request")
         self.assertEqual(dispatch_span.resource, "flask.dispatch_request")
-        self.assertEqual(dispatch_span.error, 1)
-        self.assertTrue(dispatch_span.get_tag("error.msg").startswith("404 Not Found"))
-        self.assertTrue(dispatch_span.get_tag("error.stack").startswith("Traceback"))
-        self.assertEqual(dispatch_span.get_tag("error.type"), "werkzeug.exceptions.NotFound")
+        self.assertEqual(dispatch_span.error, 0)
+        self.assertIsNone(dispatch_span.get_tag("error.msg"))
+        self.assertIsNone(dispatch_span.get_tag("error.stack"))
+        self.assertIsNone(dispatch_span.get_tag("error.type"))
 
         # Handler span
         handler_span = spans[4]
@@ -839,6 +886,19 @@ class FlaskRequestTestCase(BaseFlaskTestCase):
         span = traces[0][0]
         assert span.get_tag("http.request.headers.my-header") == "my_value"
         assert span.get_tag("http.request.headers.host") == "localhost"
+
+    def test_correct_resource_when_middleware_error(self):
+        @self.app.route("/helloworld")
+        @self.app.before_first_request
+        def error():
+            raise Exception()
+
+        self.client.get("/helloworld")
+
+        spans = self.get_spans()
+        req_span = spans[0]
+        assert req_span.resource == "GET /helloworld"
+        assert req_span.get_tag("http.status_code") == "500"
 
     def test_http_response_header_tracing(self):
         @self.app.route("/response_headers")

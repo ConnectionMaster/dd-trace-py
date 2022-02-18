@@ -2,13 +2,14 @@ from tornado.web import HTTPError
 
 from ddtrace import config
 
+from .. import trace_utils
 from ...constants import ANALYTICS_SAMPLE_RATE_KEY
 from ...constants import SPAN_MEASURED_KEY
 from ...ext import SpanTypes
-from ...ext import http
-from ...propagation.http import HTTPPropagator
+from ...internal.utils import ArgumentError
+from ...internal.utils import get_argument_value
+from ..trace_utils import set_http_meta
 from .constants import CONFIG_KEY
-from .constants import REQUEST_CONTEXT_KEY
 from .constants import REQUEST_SPAN_KEY
 from .stack_context import TracerStackContext
 
@@ -26,14 +27,9 @@ def execute(func, handler, args, kwargs):
     distributed_tracing = settings["distributed_tracing"]
 
     with TracerStackContext():
-        # attach the context to the request
-        setattr(handler.request, REQUEST_CONTEXT_KEY, tracer.get_call_context())
-
-        # Read and use propagated context from HTTP headers
-        if distributed_tracing:
-            context = HTTPPropagator.extract(handler.request.headers)
-            if context.trace_id:
-                tracer.context_provider.activate(context)
+        trace_utils.activate_distributed_headers(
+            tracer, int_config=config.tornado, request_headers=handler.request.headers, override=distributed_tracing
+        )
 
         # store the request span in the request so that it can be used later
         request_span = tracer.trace(
@@ -67,11 +63,14 @@ def on_finish(func, handler, args, kwargs):
         # space here
         klass = handler.__class__
         request_span.resource = "{}.{}".format(klass.__module__, klass.__name__)
-        request_span.set_tag("http.method", request.method)
-        request_span.set_tag("http.status_code", handler.get_status())
-        request_span.set_tag(http.URL, request.full_url().rsplit("?", 1)[0])
-        if config.tornado.trace_query_string:
-            request_span.set_tag(http.QUERY_STRING, request.query)
+        set_http_meta(
+            request_span,
+            config.tornado,
+            method=request.method,
+            url=request.full_url().rsplit("?", 1)[0],
+            status_code=handler.get_status(),
+            query=request.query,
+        )
         request_span.finish()
 
     return func(*args, **kwargs)
@@ -85,7 +84,11 @@ def log_exception(func, handler, args, kwargs):
     will not be called because ``Finish`` is not an exception.
     """
     # safe-guard: expected arguments -> log_exception(self, typ, value, tb)
-    value = args[1] if len(args) == 3 else None
+    try:
+        value = get_argument_value(args, kwargs, 1, "value")
+    except ArgumentError:
+        value = None
+
     if not value:
         return func(*args, **kwargs)
 

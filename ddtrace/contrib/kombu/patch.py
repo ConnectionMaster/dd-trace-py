@@ -1,3 +1,5 @@
+import os
+
 # 3p
 import kombu
 
@@ -5,14 +7,15 @@ from ddtrace import config
 from ddtrace.vendor import wrapt
 
 # project
+from .. import trace_utils
 from ...constants import ANALYTICS_SAMPLE_RATE_KEY
 from ...constants import SPAN_MEASURED_KEY
 from ...ext import SpanTypes
 from ...ext import kombu as kombux
+from ...internal.utils import get_argument_value
+from ...internal.utils.wrappers import unwrap
 from ...pin import Pin
 from ...propagation.http import HTTPPropagator
-from ...utils.formats import get_env
-from ...utils.wrappers import unwrap
 from .constants import DEFAULT_SERVICE
 from .utils import HEADER_POS
 from .utils import extract_conn_tags
@@ -26,7 +29,7 @@ from .utils import get_routing_key_from_args
 config._add(
     "kombu",
     {
-        "service_name": config.service or get_env("kombu", "service_name", default=DEFAULT_SERVICE),
+        "service_name": config.service or os.getenv("DD_KOMBU_SERVICE_NAME", default=DEFAULT_SERVICE),
     },
 )
 
@@ -58,14 +61,13 @@ def patch():
         prod_service = None
     # DEV: backwards-compatibility for users who set a kombu service
     else:
-        prod_service = get_env("kombu", "service_name", default=DEFAULT_SERVICE)
+        prod_service = os.getenv("DD_KOMBU_SERVICE_NAME", default=DEFAULT_SERVICE)
 
     Pin(
         service=prod_service,
-        app="kombu",
     ).onto(kombu.messaging.Producer)
 
-    Pin(service=config.kombu["service_name"], app="kombu").onto(kombu.messaging.Consumer)
+    Pin(service=config.kombu["service_name"]).onto(kombu.messaging.Consumer)
 
 
 def unpatch():
@@ -86,11 +88,10 @@ def traced_receive(func, instance, args, kwargs):
         return func(*args, **kwargs)
 
     # Signature only takes 2 args: (body, message)
-    message = args[1]
-    context = propagator.extract(message.headers)
-    # only need to active the new context if something was propagated
-    if context.trace_id:
-        pin.tracer.context_provider.activate(context)
+    message = get_argument_value(args, kwargs, 1, "message")
+
+    trace_utils.activate_distributed_headers(pin.tracer, request_headers=message.headers, override=True)
+
     with pin.tracer.trace(kombux.RECEIVE_NAME, service=pin.service, span_type=SpanTypes.WORKER) as s:
         s.set_tag(SPAN_MEASURED_KEY)
         # run the command

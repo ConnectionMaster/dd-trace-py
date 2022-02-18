@@ -4,10 +4,9 @@ import flask
 from ddtrace import Pin
 from ddtrace.ext import http
 from ddtrace.vendor import wrapt
-
-from ... import TracerTestCase
-from ... import assert_is_measured
-from ... import assert_span_http_status_code
+from tests.utils import TracerTestCase
+from tests.utils import assert_is_measured
+from tests.utils import assert_span_http_status_code
 
 
 class FlaskAutopatchTestCase(TracerTestCase):
@@ -84,7 +83,7 @@ class FlaskAutopatchTestCase(TracerTestCase):
 
         # Request tags
         for tag in ["flask.version", "http.url", "http.method", "http.status_code", "flask.endpoint", "flask.url_rule"]:
-            assert tag in req_span.meta
+            assert tag in req_span._get_tags()
 
         self.assertEqual(req_span.get_tag("flask.endpoint"), "index")
         self.assertEqual(req_span.get_tag("flask.url_rule"), "/")

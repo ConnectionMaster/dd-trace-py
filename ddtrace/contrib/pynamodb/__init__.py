@@ -18,15 +18,18 @@ Global Configuration
 ~~~~~~~~~~~~~~~~~~~~
 
 .. py:data:: ddtrace.config.pynamodb["service"]
+
    The service name reported by default for the PynamoDB instance.
+
    This option can also be set with the ``DD_PYNAMODB_SERVICE`` environment
    variable.
+
    Default: ``"pynamodb"``
 
 """
 
 
-from ...utils.importlib import require_modules
+from ...internal.utils.importlib import require_modules
 
 
 required_modules = ["pynamodb.connection.base"]

@@ -8,13 +8,21 @@ Hook reference: https://docs.pytest.org/en/3.10.1/reference.html#hook-reference
 import os
 import re
 import sys
+from time import time
 
+import hypothesis
 import pytest
+
 
 # DEV: Enable "testdir" fixture https://docs.pytest.org/en/stable/reference.html#testdir
 pytest_plugins = ("pytester",)
 
 PY_DIR_PATTERN = re.compile(r"^py[23][0-9]$")
+
+# Disable the "too slow" health checks. We are ok if data generation is slow
+# https://hypothesis.readthedocs.io/en/latest/healthchecks.html#hypothesis.HealthCheck.too_slow
+hypothesis.settings.register_profile("default", suppress_health_check=(hypothesis.HealthCheck.too_slow,))
+hypothesis.settings.load_profile("default")
 
 
 # Hook for dynamic configuration of pytest in CI
@@ -30,6 +38,11 @@ def pytest_configure(config):
         fname, ext = os.path.splitext(config.option.xmlpath)
         # DEV: `ext` will contain the `.`, e.g. `.xml`
         config.option.xmlpath = "{0}.{1}{2}".format(fname, os.getpid(), ext)
+
+    # Save per-interpreter benchmark results.
+    if config.pluginmanager.hasplugin("benchmark"):
+        gc = "_nogc" if config.option.benchmark_disable_gc else ""
+        config.option.benchmark_save = str(time()).replace(".", "_") + gc + "_py%d_%d" % sys.version_info[:2]
 
 
 # Determine if the folder should be ignored

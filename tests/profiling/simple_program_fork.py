@@ -5,7 +5,7 @@ import threading
 from ddtrace.internal import service
 import ddtrace.profiling.auto
 import ddtrace.profiling.bootstrap
-from ddtrace.profiling.collector import stack
+from ddtrace.profiling.collector import stack_event
 from ddtrace.profiling.collector import threading as cthreading
 import ddtrace.profiling.profiler
 
@@ -22,7 +22,7 @@ parent_recorder = ddtrace.profiling.bootstrap.profiler._profiler._recorder
 child_pid = os.fork()
 if child_pid == 0:
     # Child
-    # This is the first thing done on Python 3.7 and later, so mimick it here
+    # This is the first thing done on Python 3.7 and later, so mimic it here
     if sys.version_info[:2] < (3, 7):
         ddtrace.profiling.auto.start_profiler()
 
@@ -53,7 +53,7 @@ if child_pid == 0:
     assert test_lock_name not in set(e.lock_name for e in parent_events[cthreading.LockReleaseEvent])
 
     # This can run forever if anything is broken!
-    while not recorder.events[stack.StackSampleEvent]:
+    while not recorder.events[stack_event.StackSampleEvent]:
         pass
 else:
     recorder = ddtrace.profiling.bootstrap.profiler._profiler._recorder

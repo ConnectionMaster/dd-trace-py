@@ -11,9 +11,9 @@ from ...ext import SpanTypes
 from ...ext import db as dbx
 from ...ext import net
 from ...internal.logger import get_logger
+from ...internal.utils import get_argument_value
+from ...internal.utils.wrappers import unwrap
 from ...pin import Pin
-from ...utils.wrappers import unwrap
-from .constants import APP
 
 
 log = get_logger(__name__)
@@ -22,11 +22,11 @@ _PATCHED = False
 
 
 def copy_span_start(instance, span, conf, *args, **kwargs):
-    span.resource = args[0]
+    span.resource = get_argument_value(args, kwargs, 0, "sql")
 
 
 def execute_span_start(instance, span, conf, *args, **kwargs):
-    span.resource = args[0]
+    span.resource = get_argument_value(args, kwargs, 0, "operation")
 
 
 def execute_span_end(instance, result, span, conf, *args, **kwargs):
@@ -47,7 +47,6 @@ def cursor_span_end(instance, cursor, _, conf, *args, **kwargs):
         tags[dbx.NAME] = instance.options["database"]
 
     pin = Pin(
-        app=APP,
         tags=tags,
         _config=config.vertica["patch"]["vertica_python.vertica.cursor.Cursor"],
     )
@@ -59,7 +58,7 @@ config._add(
     "vertica",
     {
         "_default_service": "vertica",
-        "app": "vertica",
+        "_dbapi_span_name_prefix": "vertica",
         "patch": {
             "vertica_python.vertica.connection.Connection": {
                 "routines": {
@@ -171,7 +170,6 @@ def _install_init(patch_item, patch_class, patch_mod, config):
 
         # create and attach a pin with the defaults
         Pin(
-            app=config["app"],
             tags=config.get("tags", {}),
             tracer=config.get("tracer", ddtrace.tracer),
             _config=config["patch"][patch_item],

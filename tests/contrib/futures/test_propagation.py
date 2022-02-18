@@ -4,8 +4,7 @@ import time
 from ddtrace.contrib.futures import patch
 from ddtrace.contrib.futures import unpatch
 from tests.opentracer.utils import init_tracer
-
-from ... import TracerTestCase
+from tests.utils import TracerTestCase
 
 
 class PropagationTestCase(TracerTestCase):
@@ -58,6 +57,28 @@ class PropagationTestCase(TracerTestCase):
             with self.tracer.trace("main.thread"):
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                     future = executor.submit(fn, 42, "CheeseShop")
+                    value, key = future.result()
+                    # assert the right result
+                    self.assertEqual(value, 42)
+                    self.assertEqual(key, "CheeseShop")
+
+        # the trace must be completed
+        self.assert_structure(
+            dict(name="main.thread"),
+            (dict(name="executor.thread"),),
+        )
+
+    def test_propagation_with_kwargs(self):
+        # instrumentation must work if only kwargs are provided
+
+        def fn(value, key=None):
+            with self.tracer.trace("executor.thread"):
+                return value, key
+
+        with self.override_global_tracer():
+            with self.tracer.trace("main.thread"):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    future = executor.submit(fn=fn, value=42, key="CheeseShop")
                     value, key = future.result()
                     # assert the right result
                     self.assertEqual(value, 42)
@@ -293,10 +314,6 @@ class PropagationTestCase(TracerTestCase):
                 executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
                 future = executor.submit(fn)
                 time.sleep(0.01)
-
-        # assert main thread span is finished first
-        self.assert_span_count(1)
-        self.assert_structure(dict(name="main.thread"))
 
         # then wait for the second thread and send the trace
         result = future.result()

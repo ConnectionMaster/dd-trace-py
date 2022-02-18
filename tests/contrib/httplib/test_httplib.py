@@ -4,21 +4,20 @@ import sys
 import pytest
 
 from ddtrace import config
-from ddtrace.compat import PY2
-from ddtrace.compat import httplib
-from ddtrace.compat import parse
 from ddtrace.constants import ANALYTICS_SAMPLE_RATE_KEY
 from ddtrace.contrib.httplib import patch
 from ddtrace.contrib.httplib import unpatch
 from ddtrace.contrib.httplib.patch import should_skip_request
 from ddtrace.ext import http
+from ddtrace.internal.compat import PY2
+from ddtrace.internal.compat import httplib
+from ddtrace.internal.compat import parse
 from ddtrace.pin import Pin
 from ddtrace.vendor import wrapt
 from tests.opentracer.utils import init_tracer
-
-from ... import TracerTestCase
-from ... import assert_span_http_status_code
-from ... import override_global_tracer
+from tests.utils import TracerTestCase
+from tests.utils import assert_span_http_status_code
+from tests.utils import override_global_tracer
 
 
 if PY2:
@@ -124,7 +123,7 @@ class HTTPLibTestCase(HTTPLibBaseMixin, TracerTestCase):
 
         # Enabled Pin and internal request
         self.tracer.enabled = True
-        parsed = parse.urlparse(self.tracer.writer.agent_url)
+        parsed = parse.urlparse(self.tracer.agent_url)
         request = self.get_http_connection(parsed.hostname, parsed.port)
         pin = Pin.get_from(request)
         self.assertTrue(should_skip_request(pin, request))
@@ -166,7 +165,7 @@ class HTTPLibTestCase(HTTPLibBaseMixin, TracerTestCase):
         if config.httplib.trace_query_string:
             assert span.get_tag(http.QUERY_STRING) == query_string
         else:
-            assert http.QUERY_STRING not in span.meta
+            assert http.QUERY_STRING not in span._get_tags()
 
     def test_httplib_request_get_request_qs(self):
         with self.override_http_config("httplib", dict(trace_query_string=True)):
@@ -474,7 +473,7 @@ class HTTPLibTestCase(HTTPLibBaseMixin, TracerTestCase):
         self.assertEqual(span.get_tag("http.url"), URL_200)
 
     def test_httplib_request_get_request_ot(self):
-        """ OpenTracing version of test with same name. """
+        """OpenTracing version of test with same name."""
         ot_tracer = init_tracer("my_svc", self.tracer)
 
         with ot_tracer.start_active_span("ot_span"):

@@ -1,8 +1,18 @@
+from typing import Dict
+from typing import FrozenSet
 from typing import Optional
+from typing import Union
+from typing import cast
 
 from ..context import Context
+from ..internal._tagset import TagsetDecodeError
+from ..internal._tagset import TagsetEncodeError
+from ..internal._tagset import TagsetMaxSizeError
+from ..internal._tagset import decode_tagset_string
+from ..internal._tagset import encode_tagset_values
+from ..internal.compat import ensure_str
 from ..internal.logger import get_logger
-from .utils import get_wsgi_header
+from ._utils import get_wsgi_header
 
 
 log = get_logger(__name__)
@@ -13,6 +23,7 @@ HTTP_HEADER_TRACE_ID = "x-datadog-trace-id"
 HTTP_HEADER_PARENT_ID = "x-datadog-parent-id"
 HTTP_HEADER_SAMPLING_PRIORITY = "x-datadog-sampling-priority"
 HTTP_HEADER_ORIGIN = "x-datadog-origin"
+HTTP_HEADER_TAGS = "x-datadog-tags"
 
 
 # Note that due to WSGI spec we have to also check for uppercased and prefixed
@@ -23,6 +34,7 @@ POSSIBLE_HTTP_HEADER_SAMPLING_PRIORITIES = frozenset(
     [HTTP_HEADER_SAMPLING_PRIORITY, get_wsgi_header(HTTP_HEADER_SAMPLING_PRIORITY).lower()]
 )
 POSSIBLE_HTTP_HEADER_ORIGIN = frozenset([HTTP_HEADER_ORIGIN, get_wsgi_header(HTTP_HEADER_ORIGIN).lower()])
+POSSIBLE_HTTP_HEADER_TAGS = frozenset([HTTP_HEADER_TAGS, get_wsgi_header(HTTP_HEADER_TAGS).lower()])
 
 
 class HTTPPropagator(object):
@@ -30,6 +42,7 @@ class HTTPPropagator(object):
 
     @staticmethod
     def inject(span_context, headers):
+        # type: (Context, Dict[str, str]) -> None
         """Inject Context attributes that have to be propagated as HTTP headers.
 
         Here is an example using `requests`::
@@ -57,9 +70,37 @@ class HTTPPropagator(object):
         if span_context.dd_origin is not None:
             headers[HTTP_HEADER_ORIGIN] = str(span_context.dd_origin)
 
+        # Do not try to encode tags if we have already tried and received an error
+        if "_dd.propagation_error" in span_context._meta:
+            return
+
+        # Only propagate tags that start with `_dd.p.`
+        tags_to_encode = {}  # type: Dict[str, str]
+        for key, value in span_context._meta.items():
+            # DEV: encoding will fail if the key or value are not `str`
+            key = ensure_str(key)
+            if key.startswith("_dd.p."):
+                tags_to_encode[key] = ensure_str(value)
+
+        if tags_to_encode:
+            encoded_tags = None
+
+            try:
+                encoded_tags = encode_tagset_values(tags_to_encode)
+            except TagsetMaxSizeError:
+                # We hit the max size allowed, add a tag to the context to indicate this happened
+                span_context._meta["_dd.propagation_error"] = "max_size"
+                log.warning("failed to encode x-datadog-tags", exc_info=True)
+            except TagsetEncodeError:
+                # We hit an encoding error, add a tag to the context to indicate this happened
+                span_context._meta["_dd.propagation_error"] = "encoding_error"
+                log.warning("failed to encode x-datadog-tags", exc_info=True)
+            if encoded_tags:
+                headers[HTTP_HEADER_TAGS] = encoded_tags
+
     @staticmethod
     def _extract_header_value(possible_header_names, headers, default=None):
-        # type: (frozenset[str], dict[str, str], Optional[str]) -> str
+        # type: (FrozenSet[str], Dict[str, str], Optional[str]) -> Optional[str]
         for header in possible_header_names:
             try:
                 return headers[header]
@@ -70,7 +111,7 @@ class HTTPPropagator(object):
 
     @staticmethod
     def extract(headers):
-        # type: (dict[str,str]) -> Context
+        # type: (Dict[str,str]) -> Context
         """Extract a Context from HTTP headers into a new Context.
 
         Here is an example from a web endpoint::
@@ -83,7 +124,7 @@ class HTTPPropagator(object):
                     tracer.context_provider.activate(context)
 
                 with tracer.trace('my_controller') as span:
-                    span.set_meta('http.url', url)
+                    span.set_tag('http.url', url)
 
         :param dict headers: HTTP headers to extract tracing attributes.
         :return: New `Context` with propagated attributes.
@@ -93,16 +134,18 @@ class HTTPPropagator(object):
 
         try:
             normalized_headers = {name.lower(): v for name, v in headers.items()}
-
+            # TODO: Fix variable type changing (mypy)
             trace_id = HTTPPropagator._extract_header_value(
                 POSSIBLE_HTTP_HEADER_TRACE_IDS,
                 normalized_headers,
-                default=0,
             )
+            if trace_id is None:
+                return Context()
+
             parent_span_id = HTTPPropagator._extract_header_value(
                 POSSIBLE_HTTP_HEADER_PARENT_IDS,
                 normalized_headers,
-                default=0,
+                default="0",
             )
             sampling_priority = HTTPPropagator._extract_header_value(
                 POSSIBLE_HTTP_HEADER_SAMPLING_PRIORITIES,
@@ -112,27 +155,47 @@ class HTTPPropagator(object):
                 POSSIBLE_HTTP_HEADER_ORIGIN,
                 normalized_headers,
             )
+            meta = None
+            tags_value = HTTPPropagator._extract_header_value(
+                POSSIBLE_HTTP_HEADER_TAGS,
+                normalized_headers,
+                default="",
+            )
+            if tags_value:
+                # Do not fail if the tags are malformed
+                try:
+                    # We get a Dict[str, str], but need it to be Dict[Union[str, bytes], str] (e.g. _MetaDictType)
+                    meta = cast(Dict[Union[str, bytes], str], decode_tagset_string(tags_value))
+                except TagsetDecodeError:
+                    log.debug("failed to decode x-datadog-tags: %r", tags_value, exc_info=True)
 
             # Try to parse values into their expected types
             try:
                 if sampling_priority is not None:
-                    sampling_priority = int(sampling_priority)
+                    sampling_priority = int(sampling_priority)  # type: ignore[assignment]
+                else:
+                    sampling_priority = sampling_priority
 
                 return Context(
                     # DEV: Do not allow `0` for trace id or span id, use None instead
                     trace_id=int(trace_id) or None,
-                    span_id=int(parent_span_id) or None,
-                    sampling_priority=sampling_priority,
+                    span_id=int(parent_span_id) or None,  # type: ignore[arg-type]
+                    sampling_priority=sampling_priority,  # type: ignore[arg-type]
                     dd_origin=origin,
+                    meta=meta,
                 )
             # If headers are invalid and cannot be parsed, return a new context and log the issue.
             except (TypeError, ValueError):
                 log.debug(
-                    "received invalid x-datadog-* headers, trace-id: %r, parent-id: %r, priority: %r, origin: %r",
+                    (
+                        "received invalid x-datadog-* headers, "
+                        "trace-id: %r, parent-id: %r, priority: %r, origin: %r, tags: %r"
+                    ),
                     trace_id,
                     parent_span_id,
                     sampling_priority,
                     origin,
+                    tags_value,
                 )
                 return Context()
         except Exception:

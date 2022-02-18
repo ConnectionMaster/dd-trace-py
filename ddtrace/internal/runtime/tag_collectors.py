@@ -1,3 +1,6 @@
+from typing import List
+from typing import Tuple
+
 from ...constants import ENV_KEY
 from .collector import ValueCollector
 from .constants import LANG
@@ -9,7 +12,7 @@ from .constants import TRACER_VERSION
 
 class RuntimeTagCollector(ValueCollector):
     periodic = False
-    value = []
+    value = []  # type: List[Tuple[str, str]]
 
 
 class TracerTagCollector(RuntimeTagCollector):
@@ -21,8 +24,8 @@ class TracerTagCollector(RuntimeTagCollector):
         ddtrace = self.modules.get("ddtrace")
         # make sure to copy _services to avoid RuntimeError: Set changed size during iteration
         tags = [(SERVICE, service) for service in list(ddtrace.tracer._services)]
-        if ENV_KEY in ddtrace.tracer.tags:
-            tags.append((ENV_KEY, ddtrace.tracer.tags[ENV_KEY]))
+        if ENV_KEY in ddtrace.tracer._tags:
+            tags.append((ENV_KEY, ddtrace.tracer._tags.get(ENV_KEY)))
         return tags
 
 
@@ -42,7 +45,7 @@ class PlatformTagCollector(RuntimeTagCollector):
 
     """
 
-    required_modules = ("platform", "ddtrace")
+    required_modules = ["platform", "ddtrace"]
 
     def collect_fn(self, keys):
         platform = self.modules.get("platform")

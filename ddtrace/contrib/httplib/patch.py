@@ -1,21 +1,22 @@
+import os
 import sys
 
+import six
+
 from ddtrace import config
-from ddtrace.vendor import six
 from ddtrace.vendor import wrapt
 
 from .. import trace_utils
-from ...compat import PY2
-from ...compat import httplib
-from ...compat import parse
 from ...constants import ANALYTICS_SAMPLE_RATE_KEY
 from ...ext import SpanTypes
+from ...internal.compat import PY2
+from ...internal.compat import httplib
+from ...internal.compat import parse
 from ...internal.logger import get_logger
+from ...internal.utils.formats import asbool
 from ...pin import Pin
 from ...propagation.http import HTTPPropagator
-from ...utils.formats import asbool
-from ...utils.formats import get_env
-from ...utils.wrappers import unwrap as _u
+from ..trace_utils import unwrap as _u
 
 
 span_name = "httplib.request" if PY2 else "http.client.request"
@@ -26,13 +27,13 @@ log = get_logger(__name__)
 config._add(
     "httplib",
     {
-        "distributed_tracing": asbool(get_env("httplib", "distributed_tracing", default=True)),
+        "distributed_tracing": asbool(os.getenv("DD_HTTPLIB_DISTRIBUTED_TRACING", default=True)),
     },
 )
 
 
 def _wrap_init(func, instance, args, kwargs):
-    Pin(app="httplib", service=None, _config=config.httplib).onto(instance)
+    Pin(service=None, _config=config.httplib).onto(instance)
     return func(*args, **kwargs)
 
 
@@ -164,14 +165,15 @@ def should_skip_request(pin, request):
     if not pin or not pin.enabled():
         return True
 
-    if hasattr(pin.tracer.writer, "agent_url"):
-        parsed = parse.urlparse(pin.tracer.writer.agent_url)
+    agent_url = pin.tracer.agent_trace_url
+    if agent_url:
+        parsed = parse.urlparse(agent_url)
         return request.host == parsed.hostname and request.port == parsed.port
     return False
 
 
 def patch():
-    """ patch the built-in urllib/httplib/httplib.client methods for tracing"""
+    """patch the built-in urllib/httplib/httplib.client methods for tracing"""
     if getattr(httplib, "__datadog_patch", False):
         return
     setattr(httplib, "__datadog_patch", True)
@@ -193,7 +195,7 @@ def patch():
 
 
 def unpatch():
-    """ unpatch any previously patched modules """
+    """unpatch any previously patched modules"""
     if not getattr(httplib, "__datadog_patch", False):
         return
     setattr(httplib, "__datadog_patch", False)

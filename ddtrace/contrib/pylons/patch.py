@@ -1,3 +1,5 @@
+import os
+
 import pylons.wsgiapp
 
 from ddtrace import Pin
@@ -5,10 +7,17 @@ from ddtrace import config
 from ddtrace import tracer
 from ddtrace.vendor import wrapt
 
-from ...utils.formats import asbool
-from ...utils.formats import get_env
-from ...utils.wrappers import unwrap as _u
+from ...internal.utils.formats import asbool
+from ...internal.utils.wrappers import unwrap as _u
 from .middleware import PylonsTraceMiddleware
+
+
+config._add(
+    "pylons",
+    dict(
+        distributed_tracing=asbool(os.getenv("DD_PYLONS_DISTRIBUTED_TRACING", default=True)),
+    ),
+)
 
 
 def patch():
@@ -34,9 +43,10 @@ def traced_init(wrapped, instance, args, kwargs):
 
     # set tracing options and create the TraceMiddleware
     service = config._get_service(default="pylons")
-    distributed_tracing = asbool(get_env("pylons", "distributed_tracing", default=True))
     Pin(service=service, tracer=tracer).onto(instance)
-    traced_app = PylonsTraceMiddleware(instance, tracer, service=service, distributed_tracing=distributed_tracing)
+    traced_app = PylonsTraceMiddleware(
+        instance, tracer, service=service, distributed_tracing=config.pylons.distributed_tracing
+    )
 
     # re-order the middleware stack so that the first middleware is ours
     traced_app.app = instance.app

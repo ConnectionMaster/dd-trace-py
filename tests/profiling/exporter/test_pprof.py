@@ -1,17 +1,18 @@
 import os
 
 import mock
+import six
 
+from ddtrace import ext
 from ddtrace.profiling.collector import memalloc
-from ddtrace.profiling.collector import stack
+from ddtrace.profiling.collector import stack_event
 from ddtrace.profiling.collector import threading
 from ddtrace.profiling.exporter import pprof
-from ddtrace.vendor import six
 
 
 TEST_EVENTS = {
-    stack.StackExceptionSampleEvent: [
-        stack.StackExceptionSampleEvent(
+    stack_event.StackExceptionSampleEvent: [
+        stack_event.StackExceptionSampleEvent(
             timestamp=1,
             thread_id=67892304,
             thread_native_id=123987,
@@ -25,7 +26,7 @@ TEST_EVENTS = {
             sampling_period=1000000,
             nframes=3,
         ),
-        stack.StackExceptionSampleEvent(
+        stack_event.StackExceptionSampleEvent(
             timestamp=2,
             thread_id=67892304,
             thread_native_id=123987,
@@ -39,7 +40,7 @@ TEST_EVENTS = {
             exc_type=TypeError,
             nframes=3,
         ),
-        stack.StackExceptionSampleEvent(
+        stack_event.StackExceptionSampleEvent(
             timestamp=3,
             thread_id=67892304,
             thread_native_id=123987,
@@ -53,7 +54,7 @@ TEST_EVENTS = {
             exc_type=TypeError,
             nframes=4,
         ),
-        stack.StackExceptionSampleEvent(
+        stack_event.StackExceptionSampleEvent(
             timestamp=4,
             thread_id=67892304,
             thread_native_id=123987,
@@ -67,7 +68,7 @@ TEST_EVENTS = {
             exc_type=TypeError,
             nframes=6,
         ),
-        stack.StackExceptionSampleEvent(
+        stack_event.StackExceptionSampleEvent(
             timestamp=5,
             thread_id=67892304,
             thread_native_id=123987,
@@ -81,7 +82,7 @@ TEST_EVENTS = {
             exc_type=ValueError,
             nframes=3,
         ),
-        stack.StackExceptionSampleEvent(
+        stack_event.StackExceptionSampleEvent(
             timestamp=6,
             thread_id=67892304,
             thread_native_id=123987,
@@ -95,12 +96,12 @@ TEST_EVENTS = {
             exc_type=IOError,
             nframes=3,
         ),
-        stack.StackExceptionSampleEvent(
+        stack_event.StackExceptionSampleEvent(
             timestamp=7,
             thread_id=67892304,
             thread_native_id=123987,
-            trace_ids=set([1322219321, 343332]),
-            span_ids=set([1322219]),
+            local_root_span_id=1322219321,
+            span_id=1322219,
             thread_name="MainThread",
             frames=[
                 ("foobar.py", 23, "func1"),
@@ -178,13 +179,13 @@ TEST_EVENTS = {
             thread_id=67892304,
             thread_native_id=123987,
             thread_name="MainThread",
-            trace_ids=set([1322219321]),
+            local_root_span_id=1322219321,
+            span_id=49393,
             frames=[
                 ("foobar.py", 23, "func1"),
                 ("foobar.py", 44, "func2"),
                 ("foobar2.py", 19, "func5"),
             ],
-            span_ids=set([49393]),
             size=68,
             capture_pct=50,
             nframes=3,
@@ -283,7 +284,7 @@ TEST_EVENTS = {
             thread_id=67892304,
             thread_native_id=123987,
             thread_name="MainThread",
-            trace_ids=set([1322219321]),
+            local_root_span_id=1322219321,
             frames=[
                 ("foobar.py", 23, "func1"),
                 ("foobar.py", 44, "func2"),
@@ -322,59 +323,65 @@ TEST_EVENTS = {
             sample_size=512 * 1024,
         ),
     ],
-    stack.StackSampleEvent: [
-        stack.StackSampleEvent(
+    stack_event.StackSampleEvent: [
+        stack_event.StackSampleEvent(
             timestamp=1,
             thread_id=67892304,
             thread_native_id=123987,
             thread_name="MainThread",
-            trace_ids=set([1322219321]),
+            local_root_span_id=1322219321,
+            span_id=49343,
+            trace_type=ext.SpanTypes.WEB,
+            trace_resource_container=["myresource"],
             frames=[
                 ("foobar.py", 23, "func1"),
                 ("foobar.py", 44, "func2"),
                 ("foobar.py", 19, "func5"),
             ],
-            span_ids=set([49343]),
+            task_id=123,
+            task_name="sometask",
             wall_time_ns=1324,
             cpu_time_ns=1321,
             sampling_period=1000000,
             nframes=3,
         ),
-        stack.StackSampleEvent(
+        stack_event.StackSampleEvent(
             timestamp=2,
             thread_id=67892304,
             thread_native_id=123987,
             thread_name="MainThread",
-            trace_ids=set([1322219321]),
+            local_root_span_id=1322219321,
+            span_id=24930,
+            trace_type="sql",
+            trace_resource_container=[u"\x1bnotme"],
             frames=[
                 ("foobar.py", 23, "func1"),
                 ("foobar.py", 44, "func2"),
                 ("foobar.py", 20, "func5"),
             ],
-            span_ids=set([24930]),
             wall_time_ns=13244,
             cpu_time_ns=1312,
             sampling_period=1000000,
             nframes=3,
         ),
-        stack.StackSampleEvent(
+        stack_event.StackSampleEvent(
             timestamp=3,
             thread_id=67892304,
             thread_native_id=123987,
             thread_name="MainThread",
-            trace_ids=set([1322219321]),
+            local_root_span_id=1322219321,
+            span_id=24930,
             frames=[
                 ("foobar.py", 23, "func1"),
                 ("foobar.py", 44, "func2"),
                 ("foobar.py", 19, "func5"),
             ],
-            span_ids=set([24930]),
             wall_time_ns=1324,
             cpu_time_ns=29121,
             sampling_period=1000000,
             nframes=4,
         ),
-        stack.StackSampleEvent(
+        stack_event.StackSampleEvent(
             timestamp=4,
             thread_id=67892304,
             thread_native_id=123987,
@@ -389,24 +396,24 @@ TEST_EVENTS = {
             sampling_period=1000000,
             nframes=6,
         ),
-        stack.StackSampleEvent(
+        stack_event.StackSampleEvent(
             timestamp=5,
             thread_id=67892304,
             thread_native_id=123987,
             thread_name="MainThread",
-            trace_ids=set([1322219321]),
+            local_root_span_id=1322219321,
+            span_id=249304,
             frames=[
                 ("foobar.py", 23, "func1"),
                 ("foobar.py", 44, "func2"),
                 ("foobar2.py", 19, "func5"),
             ],
-            span_ids=set([249304]),
             wall_time_ns=132444,
             cpu_time_ns=9042,
             sampling_period=1000000,
             nframes=3,
         ),
-        stack.StackSampleEvent(
+        stack_event.StackSampleEvent(
             timestamp=6,
             thread_id=67892304,
             thread_native_id=123987,
@@ -421,7 +428,7 @@ TEST_EVENTS = {
             sampling_period=1000000,
             nframes=3,
         ),
-        stack.StackSampleEvent(
+        stack_event.StackSampleEvent(
             timestamp=7,
             thread_id=67892304,
             thread_native_id=123987,
@@ -448,8 +455,12 @@ TEST_EVENTS = {
                 ("foobar.py", 44, "func2"),
                 ("foobar.py", 19, "func5"),
             ],
-            trace_ids={23435},
-            span_ids={345432},
+            task_id=12234,
+            task_name="mytask",
+            local_root_span_id=23435,
+            span_id=345432,
+            trace_type=ext.SpanTypes.WEB,
+            trace_resource_container=[u"myresource"],
             nframes=3,
             wait_time_ns=74839,
             sampling_pct=10,
@@ -459,6 +470,10 @@ TEST_EVENTS = {
             timestamp=2,
             thread_id=67892304,
             thread_name="MainThread",
+            local_root_span_id=23435,
+            span_id=345432,
+            trace_type="sql",
+            trace_resource_container=[b"notme"],
             frames=[
                 ("foobar.py", 23, "func1"),
                 ("foobar.py", 44, "func2"),
@@ -673,10 +688,10 @@ def test_to_str_none():
     assert id1 == id2 != id_o
 
 
-def test_ppprof_exporter():
+@mock.patch("ddtrace.internal.utils.config.get_application_name")
+def test_pprof_exporter(gan):
+    gan.return_value = "bonjour"
     exp = pprof.PprofExporter()
-    exp._get_program_name = mock.Mock()
-    exp._get_program_name.return_value = "bonjour"
     exports = exp.export(TEST_EVENTS, 1, 7)
     if six.PY2:
         filename = "test-pprof-exporter-py2.txt"

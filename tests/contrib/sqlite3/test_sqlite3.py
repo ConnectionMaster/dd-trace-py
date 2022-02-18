@@ -6,16 +6,16 @@ import pytest
 import ddtrace
 from ddtrace import Pin
 from ddtrace.constants import ANALYTICS_SAMPLE_RATE_KEY
-from ddtrace.contrib.sqlite3 import connection_factory
+from ddtrace.constants import ERROR_MSG
+from ddtrace.constants import ERROR_STACK
+from ddtrace.constants import ERROR_TYPE
 from ddtrace.contrib.sqlite3.patch import TracedSQLiteCursor
 from ddtrace.contrib.sqlite3.patch import patch
 from ddtrace.contrib.sqlite3.patch import unpatch
-from ddtrace.ext import errors
 from tests.opentracer.utils import init_tracer
-
-from ... import TracerTestCase
-from ... import assert_is_measured
-from ... import assert_is_not_measured
+from tests.utils import TracerTestCase
+from tests.utils import assert_is_measured
+from tests.utils import assert_is_not_measured
 
 
 class TestSQLite(TracerTestCase):
@@ -26,17 +26,6 @@ class TestSQLite(TracerTestCase):
     def tearDown(self):
         unpatch()
         super(TestSQLite, self).tearDown()
-
-    def test_backwards_compat(self):
-        # a small test to ensure that if the previous interface is used
-        # things still work
-        factory = connection_factory(self.tracer, service="my_db_service")
-        conn = sqlite3.connect(":memory:", factory=factory)
-        q = "select * from sqlite_master"
-        cursor = conn.execute(q)
-        self.assertIsInstance(cursor, TracedSQLiteCursor)
-        assert not cursor.fetchall()
-        assert not self.spans
 
     def test_service_info(self):
         backup_tracer = ddtrace.tracer
@@ -84,9 +73,9 @@ class TestSQLite(TracerTestCase):
             root = self.get_root_span()
             assert_is_measured(root)
             self.assertIsNone(root.get_tag("sql.query"))
-            self.assertIsNotNone(root.get_tag(errors.ERROR_STACK))
-            self.assertIn("OperationalError", root.get_tag(errors.ERROR_TYPE))
-            self.assertIn("no such table", root.get_tag(errors.ERROR_MSG))
+            self.assertIsNotNone(root.get_tag(ERROR_STACK))
+            self.assertIn("OperationalError", root.get_tag(ERROR_TYPE))
+            self.assertIn("no such table", root.get_tag(ERROR_MSG))
             self.reset()
 
     def test_sqlite_fetchall_is_traced(self):
@@ -99,7 +88,7 @@ class TestSQLite(TracerTestCase):
         self.assert_structure(dict(name="sqlite.query", resource=q))
         self.reset()
 
-        with self.override_config("dbapi2", dict(trace_fetch_methods=True)):
+        with self.override_config("sqlite", dict(trace_fetch_methods=True)):
             connection = self._given_a_traced_connection(self.tracer)
             cursor = connection.execute(q)
             cursor.fetchall()
@@ -126,7 +115,7 @@ class TestSQLite(TracerTestCase):
         self.assert_structure(dict(name="sqlite.query", resource=q))
         self.reset()
 
-        with self.override_config("dbapi2", dict(trace_fetch_methods=True)):
+        with self.override_config("sqlite", dict(trace_fetch_methods=True)):
             connection = self._given_a_traced_connection(self.tracer)
             cursor = connection.execute(q)
             cursor.fetchone()
@@ -160,7 +149,7 @@ class TestSQLite(TracerTestCase):
         self.assert_structure(dict(name="sqlite.query", resource=q))
         self.reset()
 
-        with self.override_config("dbapi2", dict(trace_fetch_methods=True)):
+        with self.override_config("sqlite", dict(trace_fetch_methods=True)):
             connection = self._given_a_traced_connection(self.tracer)
             cursor = connection.execute(q)
             cursor.fetchmany(123)
@@ -207,7 +196,7 @@ class TestSQLite(TracerTestCase):
         assert_is_measured(self.get_spans()[1])
         self.reset()
 
-        with self.override_config("dbapi2", dict(trace_fetch_methods=True)):
+        with self.override_config("sqlite", dict(trace_fetch_methods=True)):
             with ot_tracer.start_active_span("sqlite_op"):
                 db = sqlite3.connect(":memory:")
                 pin = Pin.get_from(db)
@@ -295,7 +284,7 @@ class TestSQLite(TracerTestCase):
         self.assertIsNone(span.get_metric(ANALYTICS_SAMPLE_RATE_KEY))
 
     def test_analytics_with_rate(self):
-        with self.override_config("dbapi2", dict(analytics_enabled=True, analytics_sample_rate=0.5)):
+        with self.override_config("sqlite", dict(analytics_enabled=True, analytics_sample_rate=0.5)):
             q = "select * from sqlite_master"
             connection = self._given_a_traced_connection(self.tracer)
             cursor = connection.execute(q)
@@ -307,7 +296,7 @@ class TestSQLite(TracerTestCase):
             self.assertEqual(span.get_metric(ANALYTICS_SAMPLE_RATE_KEY), 0.5)
 
     def test_analytics_without_rate(self):
-        with self.override_config("dbapi2", dict(analytics_enabled=True)):
+        with self.override_config("sqlite", dict(analytics_enabled=True)):
             q = "select * from sqlite_master"
             connection = self._given_a_traced_connection(self.tracer)
             cursor = connection.execute(q)

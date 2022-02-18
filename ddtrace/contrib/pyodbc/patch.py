@@ -1,7 +1,10 @@
+import os
+
 import pyodbc
 
 from ... import Pin
 from ... import config
+from ...internal.utils.formats import asbool
 from ..dbapi import TracedConnection
 from ..dbapi import TracedCursor
 from ..trace_utils import unwrap
@@ -12,6 +15,8 @@ config._add(
     "pyodbc",
     dict(
         _default_service="pyodbc",
+        _dbapi_span_name_prefix="pyodbc",
+        trace_fetch_methods=asbool(os.getenv("DD_PYODBC_TRACE_FETCH_METHODS", default=False)),
     ),
 )
 
@@ -35,7 +40,7 @@ def _connect(func, instance, args, kwargs):
 
 
 def patch_conn(conn):
-    pin = Pin(service=None, app="pyodbc")
+    pin = Pin(service=None)
     wrapped = PyODBCTracedConnection(conn, pin=pin)
     pin.onto(wrapped)
     return wrapped

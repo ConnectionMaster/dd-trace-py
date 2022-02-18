@@ -26,6 +26,14 @@ Global Configuration
 
    Default: ``"pyodbc"``
 
+.. py:data:: ddtrace.config.pyodbc["trace_fetch_methods"]
+
+   Whether or not to trace fetch methods.
+
+   Can also configured via the ``DD_PYODBC_TRACE_FETCH_METHODS`` environment variable.
+
+   Default: ``False``
+
 
 Instance Configuration
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -45,7 +53,7 @@ To configure the integration on an per-connection basis use the
     cursor = db.cursor()
     cursor.execute("select * from users where id = 1")
 """
-from ...utils.importlib import require_modules
+from ...internal.utils.importlib import require_modules
 
 
 required_modules = ["pyodbc"]

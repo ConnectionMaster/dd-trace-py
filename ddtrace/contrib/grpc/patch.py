@@ -5,7 +5,8 @@ from ddtrace import config
 from ddtrace.vendor.wrapt import wrap_function_wrapper as _w
 
 from . import constants
-from ...utils.wrappers import unwrap as _u
+from . import utils
+from ..trace_utils import unwrap as _u
 from .client_interceptor import create_client_interceptor
 from .client_interceptor import intercept_channel
 from .server_interceptor import create_server_interceptor
@@ -64,6 +65,7 @@ def _unpatch_client():
 
     _u(grpc, "secure_channel")
     _u(grpc, "insecure_channel")
+    _u(grpc, "intercept_channel")
 
 
 def _patch_server():
@@ -95,7 +97,7 @@ def _client_channel_interceptor(wrapped, instance, args, kwargs):
     if not pin or not pin.enabled():
         return channel
 
-    (host, port) = _parse_target_from_arguments(args, kwargs)
+    (host, port) = utils._parse_target_from_args(args, kwargs)
 
     interceptor_function = create_client_interceptor(pin, host, port)
     return grpc.intercept_channel(channel, interceptor_function)
@@ -118,14 +120,3 @@ def _server_constructor_interceptor(wrapped, instance, args, kwargs):
         kwargs["interceptors"] = (interceptor,)
 
     return wrapped(*args, **kwargs)
-
-
-def _parse_target_from_arguments(args, kwargs):
-    if "target" in kwargs:
-        target = kwargs["target"]
-    else:
-        target = args[0]
-
-    split = target.rsplit(":", 2)
-
-    return (split[0], split[1] if len(split) > 1 else None)

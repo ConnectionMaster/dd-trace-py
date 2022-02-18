@@ -18,11 +18,23 @@ Configuration
 
 .. py:data:: ddtrace.config.botocore['distributed_tracing']
 
-   Whether to inject distributed tracing data to requests in SQS and Lambda.
+   Whether to inject distributed tracing data to requests in SQS, SNS, EventBridge, Kinesis Streams and Lambda.
 
    Can also be enabled with the ``DD_BOTOCORE_DISTRIBUTED_TRACING`` environment variable.
 
    Default: ``True``
+
+.. py:data:: ddtrace.config.botocore['invoke_with_legacy_context']
+
+    This preserves legacy behavior when tracing directly invoked Python and Node Lambda
+    functions instrumented with datadog-lambda-python < v41 or datadog-lambda-js < v3.58.0.
+
+    Legacy support for older libraries is available with
+    ``ddtrace.config.botocore.invoke_with_legacy_context = True`` or by setting the environment
+    variable ``DD_BOTOCORE_INVOKE_WITH_LEGACY_CONTEXT=true``.
+
+
+    Default: ``False``
 
 
 Example::
@@ -35,7 +47,7 @@ Example::
 """
 
 
-from ...utils.importlib import require_modules
+from ...internal.utils.importlib import require_modules
 
 
 required_modules = ["botocore.client"]
